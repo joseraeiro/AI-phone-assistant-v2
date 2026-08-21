@@ -9,10 +9,16 @@ from fastapi import APIRouter, Depends, Form, Query, Request, Response, WebSocke
 from fastapi.websockets import WebSocketDisconnect, WebSocketState
 from twilio.twiml.voice_response import VoiceResponse
 
+from app.agent.tools import ToolDispatcher
 from app.config import Settings, get_settings
 from app.schemas import StatusReceived
 from app.security import twilio_webhook_guard, validate_twilio_websocket
 from app.services.audio_codec import PcmuPassthroughCodec
+from app.services.call_store import (
+    CallNotFoundError,
+    CallStore,
+    get_call_store,
+)
 from app.services.media_stream import (
     MalformedMediaEvent,
     MediaStreamSession,
@@ -86,6 +92,7 @@ async def media_stream(
     websocket: WebSocket,
     settings: Annotated[Settings, Depends(get_settings)],
     realtime: Annotated[OpenAIRealtimeSession, Depends(get_realtime_session)],
+    store: Annotated[CallStore, Depends(get_call_store)],
 ) -> None:
     """Bridge one authenticated Twilio media connection to OpenAI Realtime."""
 
@@ -113,11 +120,21 @@ async def media_stream(
                 await websocket.close(code=1003)
                 return
             if message.get("event") == "start":
+                raw_call_id = session.custom_parameters.get("internal_call_id")
+                try:
+                    internal_call_id = UUID(raw_call_id or "")
+                    runtime = store.get(internal_call_id)
+                except (ValueError, CallNotFoundError):
+                    logger.error("MEDIA_STREAM_UNKNOWN_INTERNAL_CALL")
+                    await websocket.close(code=1008)
+                    return
+                realtime.configure_agent(runtime.configuration)
                 bridge = RealtimeAudioBridge(
                     twilio=websocket,
                     realtime=realtime,
                     media_session=session,
                     codec=PcmuPassthroughCodec(),
+                    tool_dispatcher=ToolDispatcher(runtime),
                 )
                 try:
                     await bridge.run()

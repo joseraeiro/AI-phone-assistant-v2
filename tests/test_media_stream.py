@@ -8,13 +8,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
+from app.domain.calls import CallConfiguration
 from app.main import app
 from app.routers.twilio import get_realtime_session
+from app.services.call_store import CallStore, get_call_store
 from app.services.media_stream import (
     MalformedMediaEvent,
     MediaStreamSession,
     UnexpectedMediaFormat,
 )
+from tests.helpers import call_configuration
 
 FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures" / "twilio_media"
 CALL_SID = "CA11111111111111111111111111111111"
@@ -23,6 +26,9 @@ INTERNAL_CALL_ID = "12345678-1234-5678-1234-567812345678"
 
 
 class WaitingRealtimeSession:
+    def configure_agent(self, call: CallConfiguration) -> None:
+        pass
+
     async def connect(self) -> None:
         pass
 
@@ -130,6 +136,9 @@ def test_websocket_handles_complete_stream_and_logs_summary(
         twilio_validate_signatures=False,
     )
     app.dependency_overrides[get_realtime_session] = WaitingRealtimeSession
+    store = CallStore()
+    store.add(call_configuration())
+    app.dependency_overrides[get_call_store] = lambda: store
     caplog.set_level(logging.INFO)
     with (
         TestClient(app) as client,
@@ -161,6 +170,9 @@ def test_websocket_handles_client_disconnect_cleanly(
         twilio_validate_signatures=False,
     )
     app.dependency_overrides[get_realtime_session] = WaitingRealtimeSession
+    store = CallStore()
+    store.add(call_configuration())
+    app.dependency_overrides[get_call_store] = lambda: store
     caplog.set_level(logging.INFO)
     with (
         TestClient(app) as client,

@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from fastapi.websockets import WebSocketDisconnect
 
+from app.agent.tools import ToolDispatcher, ToolDispatchError
 from app.services.audio_codec import AudioCodec, InvalidAudioPayload
 from app.services.media_stream import MalformedMediaEvent, MediaStreamSession
 from app.services.openai_realtime import (
@@ -41,6 +42,7 @@ class RealtimeAudioBridge:
         realtime: OpenAIRealtimeSession,
         media_session: MediaStreamSession,
         codec: AudioCodec,
+        tool_dispatcher: ToolDispatcher | None = None,
     ) -> None:
         if media_session.stream_sid is None:
             raise ValueError("Twilio start event must be processed before bridging")
@@ -49,6 +51,9 @@ class RealtimeAudioBridge:
         self.media_session = media_session
         self.codec = codec
         self.playback = AssistantPlaybackTracker()
+        self.tool_dispatcher = tool_dispatcher
+        self._finishing = False
+        self._final_response_done = False
 
     async def run(self) -> None:
         """Run both relay directions until either side stops or disconnects."""
@@ -100,6 +105,7 @@ class RealtimeAudioBridge:
                     name = mark.get("name") if isinstance(mark, dict) else None
                     if isinstance(name, str):
                         self.playback.acknowledge_mark(name)
+                        self._finish_if_ready()
                 if not should_continue:
                     raise _BridgeFinished
         except WebSocketDisconnect as exc:
@@ -184,6 +190,9 @@ class RealtimeAudioBridge:
                 response_id = event.get("response_id")
                 if isinstance(response_id, str):
                     self.playback.output_done(response_id)
+                if self._finishing:
+                    self._final_response_done = True
+                    self._finish_if_ready()
             elif event_type == "response.cancelled":
                 response_id = self._response_id(event)
                 if response_id is not None:
@@ -196,8 +205,13 @@ class RealtimeAudioBridge:
                     if response_id is not None:
                         self.playback.cancel_response(response_id)
                     logger.info("OPENAI_REALTIME_RESPONSE_CANCELLED")
+                elif await self._handle_tool_calls(event):
+                    pass
                 else:
                     logger.debug("OPENAI_REALTIME_EVENT type=response.done")
+                    if self._finishing:
+                        self._final_response_done = True
+                        self._finish_if_ready()
             elif event_type == "rate_limits.updated":
                 logger.info("OPENAI_REALTIME_RATE_LIMITS_UPDATED")
             elif event_type in {
@@ -241,3 +255,51 @@ class RealtimeAudioBridge:
         if isinstance(response, dict) and isinstance(response.get("id"), str):
             return response["id"]
         return None
+
+    async def _handle_tool_calls(self, event: dict[str, Any]) -> bool:
+        response = event.get("response")
+        output = response.get("output") if isinstance(response, dict) else None
+        if not isinstance(output, list):
+            return False
+        calls = [
+            item
+            for item in output
+            if isinstance(item, dict) and item.get("type") == "function_call"
+        ]
+        if not calls:
+            return False
+        for call in calls:
+            name = call.get("name")
+            call_id = call.get("call_id")
+            arguments = call.get("arguments")
+            if not all(isinstance(value, str) for value in (name, call_id, arguments)):
+                logger.warning("OPENAI_REALTIME_MALFORMED reason=function_call")
+                continue
+            if self.tool_dispatcher is None:
+                result = {"ok": False, "error": "Internal tools are unavailable"}
+            else:
+                try:
+                    result = self.tool_dispatcher.dispatch(name, arguments)
+                    logger.info("AGENT_TOOL_COMPLETED name=%s", name)
+                except ToolDispatchError as exc:
+                    logger.warning("AGENT_TOOL_REJECTED name=%s", name)
+                    result = {"ok": False, "error": str(exc)}
+            await self.realtime.submit_tool_output(call_id=call_id, result=result)
+
+        finishing = bool(
+            self.tool_dispatcher and self.tool_dispatcher.runtime.finish_requested
+        )
+        if finishing:
+            self._finishing = True
+            self._final_response_done = False
+        await self.realtime.request_response(finishing=finishing)
+        return True
+
+    def _finish_if_ready(self) -> None:
+        if (
+            self._finishing
+            and self._final_response_done
+            and not self.playback.is_playing
+        ):
+            logger.info("AGENT_FINISH_CALL_PLAYBACK_COMPLETE")
+            raise _BridgeFinished

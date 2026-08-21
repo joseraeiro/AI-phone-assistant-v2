@@ -41,10 +41,12 @@ class OutboundCallService:
         self.settings = settings
         self._client = client
 
-    def create(self, destination_number: str) -> CreatedCall:
+    def create(
+        self, destination_number: str, internal_call_id: UUID | None = None
+    ) -> CreatedCall:
         """Create one call, or return a deterministic dry-run result."""
 
-        internal_call_id = uuid4()
+        internal_call_id = internal_call_id or uuid4()
         if self.settings.dry_run:
             return CreatedCall(
                 sid="DRY_RUN",

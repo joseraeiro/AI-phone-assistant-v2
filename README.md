@@ -9,13 +9,13 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 4**. It creates an outbound Twilio call,
+The repository is currently at **Phase 5**. It creates an outbound Twilio call,
 connects the answered call to a bidirectional Media Stream, and bridges telephone
-audio to an interruptible OpenAI Realtime speech-to-speech session. Semantic VAD
-detects natural turns, while Twilio marks, buffer clearing, and Realtime
-conversation truncation implement barge-in without treating cleared audio as
-heard. The application does not record or persist audio and does not implement
-objectives, tools, summaries, approval, handoff, or a frontend.
+audio to an interruptible, goal-directed OpenAI Realtime agent. Each call carries
+its own objective, context, preferences, constraints, language, and explicit
+authority grants. The agent remains non-binding by default and has only three
+internal state tools. The application does not record audio and does not yet
+implement durable persistence, summaries, approval, handoff, or a frontend.
 
 ## Requirements
 
@@ -99,15 +99,24 @@ With the server and tunnel running:
 ```bash
 curl -X POST http://localhost:8000/calls \
   -H 'Content-Type: application/json' \
-  -d '{"destination_number":"+351..."}'
+  -d '{
+    "destination_name": "Loja Exemplo",
+    "destination_number": "+351...",
+    "objective": "Confirmar a hora de fecho hoje e se abre amanhã de manhã.",
+    "context": "A chamada é apenas para recolher informação.",
+    "preferences": "Confirmar horários exatos.",
+    "constraints": "Não fazer marcações nem assumir compromissos.",
+    "language": "pt-PT",
+    "authorized_actions": []
+  }'
 ```
 
 Twilio calls the destination and requests `POST /twilio/voice` after answer.
 The returned TwiML connects the call to `WSS /twilio/media`, and the server opens
-an authenticated server-to-server OpenAI Realtime WebSocket. The model is asked
-to say “Boa tarde. Sou o assistente virtual do José.” as its first utterance and
-then uses configured server-side VAD for subsequent turns. Lifecycle callbacks
-and periodic packet/byte counters appear in logs.
+an authenticated server-to-server OpenAI Realtime WebSocket. The model identifies
+itself as José's virtual assistant, briefly explains the call-specific objective,
+and begins gathering information. It then uses configured server-side VAD for
+subsequent turns. Lifecycle callbacks and packet/byte counters appear in logs.
 
 Answer the call, listen for the introduction, say “Olá, estás a ouvir-me?”, and
 continue for several turns. A successful stream produces logs with these
@@ -182,3 +191,39 @@ Official references reviewed for this phase:
 - [Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations)
 - [Realtime VAD](https://developers.openai.com/api/docs/guides/realtime-vad)
 - [`gpt-realtime-2.1` model](https://developers.openai.com/api/docs/models/gpt-realtime-2.1)
+
+## Goal and authority policy
+
+`POST /calls` requires `destination_name`, `destination_number`, `objective`,
+`context`, `preferences`, and `constraints`; `language` defaults to `pt-PT`.
+`authorized_actions` is an optional allow-list. An empty or missing allow-list
+means the call has no authority to reserve, order, purchase, schedule, accept a
+quote, commit money, cancel or modify a service, or enter an agreement. The
+objective itself never grants that authority.
+
+Owner fields are quoted as untrusted call data beneath an immutable authority
+policy. The agent is instructed to clarify ambiguity, confirm prices, dates,
+times and availability, save important facts, and politely decline unauthorized
+commitments while continuing its informational objective. There is no approval
+workflow.
+
+The only model-visible internal tools are:
+
+- `save_fact`: retain a categorized fact with confirmed, reported, or uncertain
+  confidence;
+- `set_objective_status`: set `success`, `partial`, `failed`, or `unknown` with
+  a short operational reason;
+- `finish_call`: schedule a brief spoken thank-you and goodbye. The bridge waits
+  for Twilio's final playback mark before ending the stream.
+
+Tool names are dispatched through a fixed allow-list and arguments are validated
+with Pydantic. Phase 5 state is intentionally process-local: it survives for the
+life of this application process but is lost on restart and is not shared across
+workers. Durable SQLite persistence and result APIs are later work.
+
+The function-call event flow follows the current Realtime protocol: tools are
+declared in `session.update`, completed calls are read from `response.done`,
+results are returned as `function_call_output` conversation items, and a new
+`response.create` continues the conversation.
+
+- [OpenAI Realtime function calling](https://developers.openai.com/api/docs/guides/realtime-conversations#function-calling)

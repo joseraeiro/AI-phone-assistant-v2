@@ -413,10 +413,17 @@ local playback state, and suppress late deltas from the canceled response.
 Provide a concise deterministic first-utterance instruction. Do not add
 objectives, tools, persistence, recording, approval, handoff, or UI behavior.
 
-### Phase 5 — reserved product increment
+### Phase 5 — goal-directed non-binding agent
 
-Define this phase from working behavior and then-current product requirements.
-Do not duplicate the Phase 3 Realtime adapter or prematurely implement tools.
+Require destination name and number, objective, context, preferences,
+constraints, language, and explicit authority grants in each call configuration.
+Build agent instructions in one dedicated policy module and fail closed to no
+binding authority. Expose only `save_fact`, `set_objective_status`, and
+`finish_call` through an allowlisted, Pydantic-validated dispatcher. Keep facts
+and outcome state process-local until a persistence phase. After `finish_call`,
+request a natural final utterance and close only after Twilio acknowledges its
+playback. Do not add an approval workflow, UI, recording, summaries, or arbitrary
+external-action tools.
 
 ### Phase 6 — provider media bridge
 

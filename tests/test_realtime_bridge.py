@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 from fastapi import WebSocketDisconnect
 
+from app.agent.tools import ToolDispatcher
+from app.domain.calls import CallRuntime
 from app.services.audio_codec import PcmuPassthroughCodec
 from app.services.media_stream import MediaStreamSession
 from app.services.openai_realtime import (
@@ -15,6 +17,7 @@ from app.services.openai_realtime import (
     RealtimeDisconnected,
 )
 from app.services.realtime_bridge import RealtimeAudioBridge
+from tests.helpers import call_configuration
 
 CALL_SID = "CA11111111111111111111111111111111"
 STREAM_SID = "MZ11111111111111111111111111111111"
@@ -70,6 +73,8 @@ class FakeRealtimeSession:
         self.configured = False
         self.closed = False
         self.truncations: list[dict[str, Any]] = []
+        self.tool_outputs: list[dict[str, Any]] = []
+        self.response_requests: list[bool] = []
 
     async def connect(self) -> None:
         self.connected = True
@@ -96,6 +101,12 @@ class FakeRealtimeSession:
                 "audio_end_ms": audio_end_ms,
             }
         )
+
+    async def submit_tool_output(self, *, call_id: str, result: dict[str, Any]) -> None:
+        self.tool_outputs.append({"call_id": call_id, "result": result})
+
+    async def request_response(self, *, finishing: bool = False) -> None:
+        self.response_requests.append(finishing)
 
     async def close(self) -> None:
         self.closed = True
@@ -322,5 +333,105 @@ def test_interruption_after_output_done_still_clears_unplayed_audio() -> None:
         assert realtime.truncations == [
             {"item_id": "item-1", "content_index": 0, "audio_end_ms": 0}
         ]
+
+    asyncio.run(scenario())
+
+
+def test_finish_call_waits_until_final_goodbye_mark_is_played() -> None:
+    async def scenario() -> None:
+        twilio = FakeTwilioSocket()
+        realtime = FakeRealtimeSession()
+        runtime = CallRuntime(call_configuration())
+        await realtime.incoming.put(
+            {
+                "type": "response.done",
+                "response": {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "finish_call",
+                            "call_id": "tool-call-1",
+                            "arguments": json.dumps({"reason": "Objective completed"}),
+                        }
+                    ],
+                },
+            }
+        )
+        await realtime.incoming.put(audio_delta("final-response", "final-item"))
+        await realtime.incoming.put(
+            {
+                "type": "response.output_audio.done",
+                "response_id": "final-response",
+            }
+        )
+        bridge = RealtimeAudioBridge(
+            twilio,
+            realtime,
+            media_session(),
+            PcmuPassthroughCodec(),
+            tool_dispatcher=ToolDispatcher(runtime),
+        )
+
+        task = asyncio.create_task(bridge.run())
+        for _ in range(100):
+            marks = [message for message in twilio.sent if message["event"] == "mark"]
+            if marks:
+                break
+            await asyncio.sleep(0)
+        assert marks
+        assert task.done() is False
+        await twilio.incoming.put(
+            twilio_event("mark", mark={"name": marks[-1]["mark"]["name"]})
+        )
+        await asyncio.wait_for(task, timeout=1)
+
+        assert runtime.finish_requested is True
+        assert realtime.response_requests == [True]
+        assert realtime.tool_outputs[0]["call_id"] == "tool-call-1"
+        assert realtime.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_unknown_model_tool_is_rejected_without_dynamic_execution() -> None:
+    async def scenario() -> None:
+        twilio = FakeTwilioSocket()
+        realtime = FakeRealtimeSession()
+        runtime = CallRuntime(call_configuration())
+        await realtime.incoming.put(
+            {
+                "type": "response.done",
+                "response": {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "shell_exec",
+                            "call_id": "tool-call-2",
+                            "arguments": "{}",
+                        }
+                    ],
+                },
+            }
+        )
+        await realtime.incoming.put(RealtimeDisconnected("done"))
+        bridge = RealtimeAudioBridge(
+            twilio,
+            realtime,
+            media_session(),
+            PcmuPassthroughCodec(),
+            tool_dispatcher=ToolDispatcher(runtime),
+        )
+
+        await bridge.run()
+
+        assert realtime.tool_outputs == [
+            {
+                "call_id": "tool-call-2",
+                "result": {"ok": False, "error": "Tool is not allowed: shell_exec"},
+            }
+        ]
+        assert realtime.response_requests == [False]
 
     asyncio.run(scenario())

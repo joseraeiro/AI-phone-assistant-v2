@@ -5,14 +5,17 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from app.agent.instructions import (
+    build_agent_instructions,
+    build_first_utterance_instructions,
+)
 from app.config import Settings
 from app.services.openai_realtime import (
-    FIRST_UTTERANCE_INSTRUCTIONS,
-    INITIAL_INSTRUCTIONS,
     MalformedRealtimeEvent,
     OpenAIRealtimeSession,
     RealtimeAPIError,
 )
+from tests.helpers import call_configuration
 
 
 class FakeRealtimeSocket:
@@ -49,6 +52,8 @@ def test_connect_and_configure_current_pcmu_session() -> None:
             return socket
 
         session = OpenAIRealtimeSession(realtime_settings(), connector=connector)
+        call = call_configuration()
+        session.configure_agent(call)
         await session.connect()
         await session.configure()
         await session.close()
@@ -59,7 +64,7 @@ def test_connect_and_configure_current_pcmu_session() -> None:
         }
         update, initial_response = socket.sent
         assert update["type"] == "session.update"
-        assert update["session"]["instructions"] == INITIAL_INSTRUCTIONS
+        assert update["session"]["instructions"] == build_agent_instructions(call)
         assert update["session"]["output_modalities"] == ["audio"]
         assert update["session"]["audio"] == {
             "input": {
@@ -77,7 +82,7 @@ def test_connect_and_configure_current_pcmu_session() -> None:
             "type": "response.create",
             "response": {
                 "output_modalities": ["audio"],
-                "instructions": FIRST_UTTERANCE_INSTRUCTIONS,
+                "instructions": build_first_utterance_instructions(call),
             },
         }
         assert socket.closed is True
@@ -101,6 +106,7 @@ def test_server_vad_settings_are_configurable() -> None:
             }
         )
         session = OpenAIRealtimeSession(settings, connector=connector)
+        session.configure_agent(call_configuration())
         await session.connect()
         await session.configure()
 
@@ -183,5 +189,35 @@ def test_receive_event_handles_error_and_malformed_json() -> None:
         )
         with pytest.raises(RealtimeAPIError, match="rate_limit_exceeded"):
             await session.receive_event()
+
+    asyncio.run(scenario())
+
+
+def test_tool_output_and_final_response_use_realtime_event_shapes() -> None:
+    async def scenario() -> None:
+        socket = FakeRealtimeSocket()
+
+        async def connector(url: str, **kwargs: Any) -> FakeRealtimeSocket:
+            return socket
+
+        session = OpenAIRealtimeSession(realtime_settings(), connector=connector)
+        await session.connect()
+        await session.submit_tool_output(
+            call_id="call-1", result={"saved": True, "category": "hours"}
+        )
+        await session.request_response(finishing=True)
+
+        assert socket.sent[0] == {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": '{"saved": true, "category": "hours"}',
+            },
+        }
+        assert socket.sent[1]["type"] == "response.create"
+        assert socket.sent[1]["response"]["output_modalities"] == ["audio"]
+        assert socket.sent[1]["response"]["tool_choice"] == "none"
+        assert "thank-you and goodbye" in socket.sent[1]["response"]["instructions"]
 
     asyncio.run(scenario())

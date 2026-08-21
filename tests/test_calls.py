@@ -9,7 +9,9 @@ from pydantic import SecretStr
 from app.config import Settings, get_settings
 from app.main import app
 from app.routers.calls import get_call_service
+from app.services.call_store import CallStore, get_call_store
 from app.services.twilio import OutboundCallService
+from tests.helpers import call_request
 
 
 @pytest.fixture
@@ -17,6 +19,7 @@ def client() -> TestClient:
     app.dependency_overrides[get_settings] = lambda: Settings(
         twilio_validate_signatures=False
     )
+    app.dependency_overrides[get_call_store] = CallStore
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -36,30 +39,31 @@ def client() -> TestClient:
     ],
 )
 def test_rejects_non_e164_destination_numbers(client: TestClient, number: str) -> None:
-    response = client.post("/calls", json={"destination_number": number})
+    response = client.post("/calls", json=call_request(destination_number=number))
 
     assert response.status_code == 422
 
 
 def test_accepts_e164_destination_and_creates_call(client: TestClient) -> None:
     service = Mock(spec=OutboundCallService)
-    service.create.return_value = SimpleNamespace(
-        sid="CA123",
-        status="queued",
-        internal_call_id=UUID("12345678-1234-5678-1234-567812345678"),
+    service.create.side_effect = lambda destination, internal_id: SimpleNamespace(
+        sid="CA123", status="queued", internal_call_id=internal_id
     )
     app.dependency_overrides[get_call_service] = lambda: service
 
-    response = client.post("/calls", json={"destination_number": "+351211234567"})
+    response = client.post("/calls", json=call_request())
 
     assert response.status_code == 201
-    assert response.json() == {
+    response_body = response.json()
+    assert response_body == {
         "call_sid": "CA123",
         "status": "queued",
         "simulated": False,
-        "internal_call_id": "12345678-1234-5678-1234-567812345678",
+        "internal_call_id": response_body["internal_call_id"],
     }
-    service.create.assert_called_once_with("+351211234567")
+    service.create.assert_called_once()
+    assert service.create.call_args.args[0] == "+351211234567"
+    assert isinstance(service.create.call_args.args[1], UUID)
 
 
 def test_twilio_sdk_receives_expected_call_configuration(
@@ -113,7 +117,7 @@ def test_dry_run_endpoint_returns_simulated_result(client: TestClient) -> None:
         Settings(dry_run=True)
     )
 
-    response = client.post("/calls", json={"destination_number": "+351211234567"})
+    response = client.post("/calls", json=call_request())
 
     assert response.status_code == 201
     response_body = response.json()

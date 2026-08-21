@@ -9,21 +9,18 @@ from urllib.parse import urlencode
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from app.agent.instructions import (
+    FINAL_UTTERANCE_INSTRUCTIONS,
+    build_agent_instructions,
+    build_first_utterance_instructions,
+)
+from app.agent.tools import realtime_tool_definitions, serialize_tool_result
 from app.config import Settings
+from app.domain.calls import CallConfiguration
 
 logger = logging.getLogger(__name__)
 
 REALTIME_ENDPOINT = "wss://api.openai.com/v1/realtime"
-INITIAL_INSTRUCTIONS = (
-    "You are having a telephone conversation in European Portuguese. Use concise, "
-    "telephone-friendly sentences. Allow the other person to interrupt. Avoid "
-    "monologues, ask only one or two related questions at once, and do not repeat "
-    "yourself unnecessarily. You are José's virtual assistant, not José himself."
-)
-FIRST_UTTERANCE_INSTRUCTIONS = (
-    'Begin the call by saying exactly: "Boa tarde. Sou o assistente virtual do José." '
-    "Do not add anything else to this first utterance."
-)
 
 
 class RealtimeSocket(Protocol):
@@ -71,6 +68,14 @@ class OpenAIRealtimeSession:
         self._connector = connector
         self._socket: RealtimeSocket | None = None
         self._closed = False
+        self._agent_instructions: str | None = None
+        self._first_utterance_instructions: str | None = None
+
+    def configure_agent(self, call: CallConfiguration) -> None:
+        """Attach the centralized prompt and allowlisted tools before connecting."""
+
+        self._agent_instructions = build_agent_instructions(call)
+        self._first_utterance_instructions = build_first_utterance_instructions(call)
 
     async def connect(self) -> None:
         """Open an authenticated server-to-server Realtime WebSocket."""
@@ -96,14 +101,21 @@ class OpenAIRealtimeSession:
     async def configure(self) -> None:
         """Configure direct PCMU speech-to-speech and prompt the first response."""
 
+        if (
+            self._agent_instructions is None
+            or self._first_utterance_instructions is None
+        ):
+            raise RealtimeConfigurationError("Call agent instructions are required")
         await self._send_event(
             {
                 "type": "session.update",
                 "session": {
                     "type": "realtime",
                     "model": self.settings.openai_realtime_model,
-                    "instructions": INITIAL_INSTRUCTIONS,
+                    "instructions": self._agent_instructions,
                     "output_modalities": ["audio"],
+                    "tools": realtime_tool_definitions(),
+                    "tool_choice": "auto",
                     "audio": {
                         "input": {
                             "format": {"type": "audio/pcmu"},
@@ -122,7 +134,7 @@ class OpenAIRealtimeSession:
                 "type": "response.create",
                 "response": {
                     "output_modalities": ["audio"],
-                    "instructions": FIRST_UTTERANCE_INSTRUCTIONS,
+                    "instructions": self._first_utterance_instructions,
                 },
             }
         )
@@ -145,6 +157,32 @@ class OpenAIRealtimeSession:
                 "audio_end_ms": audio_end_ms,
             }
         )
+
+    async def submit_tool_output(self, *, call_id: str, result: dict[str, Any]) -> None:
+        """Return one validated internal tool result to the model conversation."""
+
+        await self._send_event(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": serialize_tool_result(result),
+                },
+            }
+        )
+
+    async def request_response(self, *, finishing: bool = False) -> None:
+        """Ask the model to continue, optionally limiting it to a final goodbye."""
+
+        event: dict[str, Any] = {"type": "response.create"}
+        if finishing:
+            event["response"] = {
+                "output_modalities": ["audio"],
+                "instructions": FINAL_UTTERANCE_INSTRUCTIONS,
+                "tool_choice": "none",
+            }
+        await self._send_event(event)
 
     async def receive_event(self) -> dict[str, Any]:
         """Receive one server event and turn disconnect/error states into exceptions."""
