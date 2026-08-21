@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
 from app.main import app
+from app.routers.twilio import get_realtime_session
 from app.services.media_stream import (
     MalformedMediaEvent,
     MediaStreamSession,
@@ -18,6 +20,24 @@ FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures" / "twilio_media"
 CALL_SID = "CA11111111111111111111111111111111"
 STREAM_SID = "MZ11111111111111111111111111111111"
 INTERNAL_CALL_ID = "12345678-1234-5678-1234-567812345678"
+
+
+class WaitingRealtimeSession:
+    async def connect(self) -> None:
+        pass
+
+    async def configure(self) -> None:
+        pass
+
+    async def append_input_audio(self, payload: str) -> None:
+        pass
+
+    async def receive_event(self) -> dict[str, Any]:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def close(self) -> None:
+        pass
 
 
 def fixture_message(name: str) -> dict[str, Any]:
@@ -109,6 +129,7 @@ def test_websocket_handles_complete_stream_and_logs_summary(
         app_base_url="https://public.example.test",
         twilio_validate_signatures=False,
     )
+    app.dependency_overrides[get_realtime_session] = WaitingRealtimeSession
     caplog.set_level(logging.INFO)
     with (
         TestClient(app) as client,
@@ -139,6 +160,7 @@ def test_websocket_handles_client_disconnect_cleanly(
         app_base_url="https://public.example.test",
         twilio_validate_signatures=False,
     )
+    app.dependency_overrides[get_realtime_session] = WaitingRealtimeSession
     caplog.set_level(logging.INFO)
     with (
         TestClient(app) as client,

@@ -393,10 +393,14 @@ Stream WebSocket events, verify the fixed telephony media format, and count
 incoming packets and decoded bytes without forwarding, retaining, or logging
 audio. Do not implement OpenAI, transcription, recording, or persistence.
 
-### Phase 3 — local owner call-management surface
+### Phase 3 — minimum OpenAI Realtime audio bridge
 
-Add the smallest server-rendered create/list/detail workflow and API boundary.
-Authentication/deployment exposure must be addressed before non-local use.
+Connect each started Twilio stream to a server-side OpenAI Realtime WebSocket.
+Configure the current Realtime model for directly compatible G.711 mu-law input
+and output, relay base64 audio concurrently in both directions, use server VAD,
+and shut down both relay tasks when either provider disconnects. Keep codec
+validation behind an `AudioCodec` boundary. Do not add tools, persistence,
+summaries, recording, approval, handoff, or a user interface.
 
 ### Phase 4 — reserved integration increment
 
@@ -404,17 +408,16 @@ Define this phase from the repository's working behavior and then-current
 product requirements. Do not duplicate Phase 1 call control or skip ahead to a
 later integration.
 
-### Phase 5 — Realtime session adapter
+### Phase 5 — reserved product increment
 
-After reviewing current official docs, implement a separately testable OpenAI
-Realtime client, event models, session instructions, and configuration using
-fake sockets. No production media relay yet.
+Define this phase from working behavior and then-current product requirements.
+Do not duplicate the Phase 3 Realtime adapter or prematurely implement tools.
 
 ### Phase 6 — provider media bridge
 
-Verify compatibility with the other audio provider, implement pass-through or
-isolated conversion, bounded relays, interruption, cancellation, and end-to-end
-mocked stream tests. Preserve the Phase 2 Twilio event boundary.
+Extend the Phase 3 bridge only where later requirements need bounded buffering,
+more complete interruption semantics, or codec conversion. Preserve the tested
+provider boundaries and direct forwarding while formats remain compatible.
 
 ### Phase 7 — controlled end-to-end operation
 

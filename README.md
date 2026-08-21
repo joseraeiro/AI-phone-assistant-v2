@@ -9,18 +9,18 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 2**. It can create one outbound Twilio
-call, connect the answered call to a bidirectional Twilio Media Stream, validate
-the documented telephony format, count received audio packets and bytes, and log
-Twilio call and stream lifecycles. It does not yet forward or retain audio and
-does not implement OpenAI Realtime, transcription, recording, summarization,
-tools, persistence, or a frontend.
+The repository is currently at **Phase 3**. It creates an outbound Twilio call,
+connects the answered call to a bidirectional Media Stream, and bridges telephone
+audio to an OpenAI Realtime speech-to-speech session. It does not record or
+persist audio and does not implement sophisticated objectives, custom tools,
+summaries, persistence, owner approval, human handoff, or a frontend.
 
 ## Requirements
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
 - A Twilio account with a voice-capable Twilio number
+- An OpenAI API project with access to the configured Realtime model
 - A publicly reachable HTTPS URL for Twilio webhooks
 
 ## Install and run
@@ -69,6 +69,10 @@ TWILIO_AUTH_TOKEN=...
 TWILIO_PHONE_NUMBER=+351...
 TWILIO_VALIDATE_SIGNATURES=true
 DRY_RUN=false
+
+OPENAI_API_KEY=sk-...
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1
+OPENAI_REALTIME_VOICE=marin
 ```
 
 `TWILIO_PHONE_NUMBER` and the destination must use E.164 form. Trial Twilio
@@ -85,22 +89,26 @@ curl -X POST http://localhost:8000/calls \
 ```
 
 Twilio calls the destination and requests `POST /twilio/voice` after answer.
-The returned TwiML connects the call to `WSS /twilio/media`. Lifecycle callbacks
-are sent to `POST /twilio/call-status`; Media Stream lifecycle and periodic
-packet/byte counters appear in the server logs.
+The returned TwiML connects the call to `WSS /twilio/media`, and the server opens
+an authenticated server-to-server OpenAI Realtime WebSocket. The model is asked
+to introduce itself and then uses server VAD for subsequent conversational
+turns. Lifecycle callbacks and periodic packet/byte counters appear in logs.
 
-Speak into the answered telephone for several seconds and then hang up. A
-successful stream produces logs with these markers:
+Answer the call, listen for the introduction, say “Olá, estás a ouvir-me?”, and
+continue for several turns. A successful stream produces logs with these
+markers:
 
 ```text
 MEDIA_STREAM_CONNECTED
 MEDIA_STREAM_STARTED call_sid=CA... stream_sid=MZ... internal_call_id=...
+OPENAI_REALTIME_CONNECTED model=gpt-realtime-2.1
 MEDIA_RECEIVING call_sid=CA... stream_sid=MZ... packets=... bytes=... approx_seconds=...
 MEDIA_STREAM_STOPPED call_sid=CA... stream_sid=MZ... packets=... bytes=... approx_seconds=...
+OPENAI_REALTIME_CLOSED
+REALTIME_BRIDGE_STOPPED call_sid=CA... stream_sid=MZ...
 ```
 
-The application never logs the base64 payload and currently discards decoded
-audio immediately after measuring its size.
+The application never logs base64 payloads and does not record audio.
 
 To validate locally without contacting Twilio, set `DRY_RUN=true`, restart the
 server, and submit the same request. The response contains `"simulated": true`.
@@ -118,8 +126,7 @@ The implementation follows Twilio's current Media Streams message shapes for
 `connected`, `start`, `media`, `dtmf`, `mark`, and `stop`. It expects the
 documented fixed stream format: `audio/x-mulaw`, 8,000 Hz, mono. The start event
 supplies the Twilio Call SID, Stream SID, media format, and custom parameters.
-The media payload is base64-encoded audio; this phase decodes only to count
-bytes and never stores or forwards it. Unknown future event names are ignored
+The media payload is base64-encoded audio. Unknown future event names are ignored
 safely, while malformed known events are logged without including audio data.
 
 Useful official references for integration review:
@@ -127,3 +134,25 @@ Useful official references for integration review:
 - [Media Streams WebSocket messages](https://www.twilio.com/docs/voice/media-streams/websocket-messages)
 - [`<Stream>` TwiML](https://www.twilio.com/docs/voice/twiml/stream)
 - [Media Streams overview](https://www.twilio.com/docs/voice/media-streams)
+
+## OpenAI Realtime protocol boundary
+
+The default is the current `gpt-realtime-2.1` model and the recommended `marin`
+voice. The backend authenticates a server-to-server WebSocket with
+`OPENAI_API_KEY`, sends `session.update`, and requests audio-only output. Both
+input and output are configured as `audio/pcmu`, the API's name for G.711
+mu-law. This exactly matches Twilio's 8 kHz mono `audio/x-mulaw` payload, so the
+codec boundary validates and forwards base64 chunks without transcoding.
+
+Twilio input becomes `input_audio_buffer.append`. OpenAI audio is consumed only
+from `response.output_audio.delta` and returned to Twilio as JSON `media`
+messages using the active Stream SID. Server VAD automatically creates replies;
+the bridge sends Twilio `clear` when OpenAI reports new caller speech so queued
+assistant audio does not continue playing over the caller.
+
+Official references reviewed for this phase:
+
+- [Realtime API overview](https://developers.openai.com/api/docs/guides/realtime)
+- [Realtime API with WebSocket](https://developers.openai.com/api/docs/guides/realtime-websocket)
+- [Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations)
+- [`gpt-realtime-2.1` model](https://developers.openai.com/api/docs/models/gpt-realtime-2.1)

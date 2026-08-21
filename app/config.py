@@ -27,6 +27,10 @@ class Settings(BaseSettings):
 
     dry_run: bool = False
 
+    openai_api_key: SecretStr | None = None
+    openai_realtime_model: str = "gpt-realtime-2.1"
+    openai_realtime_voice: str = "marin"
+
 
 @lru_cache
 def get_settings() -> Settings:

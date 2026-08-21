@@ -6,17 +6,23 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request, Response, WebSocket
-from fastapi.websockets import WebSocketDisconnect
+from fastapi.websockets import WebSocketDisconnect, WebSocketState
 from twilio.twiml.voice_response import VoiceResponse
 
 from app.config import Settings, get_settings
 from app.schemas import StatusReceived
 from app.security import twilio_webhook_guard, validate_twilio_websocket
+from app.services.audio_codec import PcmuPassthroughCodec
 from app.services.media_stream import (
     MalformedMediaEvent,
     MediaStreamSession,
     UnexpectedMediaFormat,
 )
+from app.services.openai_realtime import (
+    OpenAIRealtimeSession,
+    RealtimeConfigurationError,
+)
+from app.services.realtime_bridge import RealtimeAudioBridge
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio", tags=["twilio"])
@@ -42,6 +48,14 @@ async def validate_twilio_request(
     """Validate the webhook unless explicitly disabled in settings."""
 
     await twilio_webhook_guard(settings)(request)
+
+
+def get_realtime_session(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OpenAIRealtimeSession:
+    """Provide one unopened Realtime session for a Twilio media connection."""
+
+    return OpenAIRealtimeSession(settings)
 
 
 @router.post("/voice", dependencies=[Depends(validate_twilio_request)])
@@ -71,8 +85,9 @@ def _media_websocket_url(settings: Settings) -> str:
 async def media_stream(
     websocket: WebSocket,
     settings: Annotated[Settings, Depends(get_settings)],
+    realtime: Annotated[OpenAIRealtimeSession, Depends(get_realtime_session)],
 ) -> None:
-    """Receive and measure Twilio audio without forwarding or retaining it."""
+    """Bridge one authenticated Twilio media connection to OpenAI Realtime."""
 
     if not validate_twilio_websocket(websocket, settings):
         logger.warning("MEDIA_STREAM_REJECTED invalid_signature")
@@ -96,6 +111,22 @@ async def media_stream(
             except UnexpectedMediaFormat as exc:
                 logger.error("MEDIA_STREAM_UNSUPPORTED_FORMAT reason=%s", exc)
                 await websocket.close(code=1003)
+                return
+            if message.get("event") == "start":
+                bridge = RealtimeAudioBridge(
+                    twilio=websocket,
+                    realtime=realtime,
+                    media_session=session,
+                    codec=PcmuPassthroughCodec(),
+                )
+                try:
+                    await bridge.run()
+                except RealtimeConfigurationError:
+                    logger.error("OPENAI_REALTIME_CONFIGURATION_ERROR")
+                    await websocket.close(code=1011)
+                    return
+                if websocket.client_state is not WebSocketState.DISCONNECTED:
+                    await websocket.close(code=1000)
                 return
             if not should_continue:
                 await websocket.close(code=1000)
