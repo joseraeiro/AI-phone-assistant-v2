@@ -252,7 +252,8 @@ Conceptually the server will need:
 
 - an owner-facing endpoint/form to create a call;
 - owner-facing call list and detail/status views;
-- a Twilio voice webhook returning TwiML that starts a bidirectional stream;
+- a Twilio voice webhook returning TwiML (a fixed `<Say>` response in Phase 1,
+  replaced or extended by a bidirectional stream in its later phase);
 - a Twilio status callback endpoint;
 - a dedicated Twilio Media Stream WebSocket;
 - internal adapters for Twilio REST and OpenAI Realtime connections.
@@ -377,10 +378,12 @@ the entire target system at once.
 Create this specification, a minimal README, and basic repository hygiene. No
 application or telephony implementation.
 
-### Phase 1 — project foundation
+### Phase 1 — project foundation and Twilio outbound call control
 
-Initialize the Python/`uv` package, settings skeleton, minimal FastAPI health
-surface, quality tooling, and tests. No provider calls or media bridge.
+Initialize the Python/`uv` package, typed settings, FastAPI health surface,
+quality tooling, and tests. Initiate a single outbound Twilio call, return fixed
+test-message TwiML, validate provider signatures, and log lifecycle callbacks.
+Do not implement persistence, OpenAI, Media Streams, or a user interface.
 
 ### Phase 2 — domain and persistence
 
@@ -392,10 +395,11 @@ persistence, and repository tests. No live provider calls.
 Add the smallest server-rendered create/list/detail workflow and API boundary.
 Authentication/deployment exposure must be addressed before non-local use.
 
-### Phase 4 — Twilio outbound call control
+### Phase 4 — reserved integration increment
 
-After reviewing current official docs, initiate calls, generate TwiML, validate
-webhooks, reconcile statuses, and use mocked contract tests. No OpenAI bridge.
+Define this phase from the repository's working behavior and then-current
+product requirements. Do not duplicate Phase 1 call control or skip ahead to a
+later integration.
 
 ### Phase 5 — Realtime session adapter
 
