@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 from typing import Any
@@ -17,7 +18,7 @@ from app.services.realtime_bridge import RealtimeAudioBridge
 
 CALL_SID = "CA11111111111111111111111111111111"
 STREAM_SID = "MZ11111111111111111111111111111111"
-AUDIO = "AAECAw=="
+AUDIO = base64.b64encode(bytes(160)).decode()
 
 
 def media_session() -> MediaStreamSession:
@@ -68,6 +69,7 @@ class FakeRealtimeSession:
         self.connected = False
         self.configured = False
         self.closed = False
+        self.truncations: list[dict[str, Any]] = []
 
     async def connect(self) -> None:
         self.connected = True
@@ -84,12 +86,33 @@ class FakeRealtimeSession:
             raise item
         return item
 
+    async def truncate_conversation_item(
+        self, *, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        self.truncations.append(
+            {
+                "item_id": item_id,
+                "content_index": content_index,
+                "audio_end_ms": audio_end_ms,
+            }
+        )
+
     async def close(self) -> None:
         self.closed = True
 
 
 def twilio_event(event: str, **contents: Any) -> str:
     return json.dumps({"event": event, "streamSid": STREAM_SID, **contents})
+
+
+def audio_delta(response_id: str, item_id: str) -> dict[str, Any]:
+    return {
+        "type": "response.output_audio.delta",
+        "response_id": response_id,
+        "item_id": item_id,
+        "content_index": 0,
+        "delta": AUDIO,
+    }
 
 
 def test_bridge_relays_audio_in_both_directions_and_tears_down() -> None:
@@ -104,9 +127,7 @@ def test_bridge_relays_audio_in_both_directions_and_tears_down() -> None:
         )
         await twilio.incoming.put("WAIT_FOR_OUTPUT")
         await twilio.incoming.put(twilio_event("stop", stop={}))
-        await realtime.incoming.put(
-            {"type": "response.output_audio.delta", "delta": AUDIO}
-        )
+        await realtime.incoming.put(audio_delta("response-1", "item-1"))
 
         bridge = RealtimeAudioBridge(
             twilio, realtime, media_session(), PcmuPassthroughCodec()
@@ -121,7 +142,12 @@ def test_bridge_relays_audio_in_both_directions_and_tears_down() -> None:
                 "event": "media",
                 "streamSid": STREAM_SID,
                 "media": {"payload": AUDIO},
-            }
+            },
+            {
+                "event": "mark",
+                "streamSid": STREAM_SID,
+                "mark": {"name": "assistant-audio-1"},
+            },
         ]
         assert realtime.closed is True
 
@@ -194,6 +220,7 @@ def test_speech_started_clears_queued_twilio_audio() -> None:
     async def scenario() -> None:
         twilio = FakeTwilioSocket()
         realtime = FakeRealtimeSession()
+        await realtime.incoming.put(audio_delta("response-1", "item-1"))
         await realtime.incoming.put({"type": "input_audio_buffer.speech_started"})
         await realtime.incoming.put(RealtimeDisconnected("done"))
 
@@ -202,6 +229,98 @@ def test_speech_started_clears_queued_twilio_audio() -> None:
         )
         await bridge.run()
 
-        assert twilio.sent == [{"event": "clear", "streamSid": STREAM_SID}]
+        assert twilio.sent[-1] == {"event": "clear", "streamSid": STREAM_SID}
+        assert realtime.truncations == [
+            {"item_id": "item-1", "content_index": 0, "audio_end_ms": 0}
+        ]
+        assert bridge.playback.is_playing is False
+
+    asyncio.run(scenario())
+
+
+def test_repeated_interruptions_clear_and_truncate_each_response() -> None:
+    async def scenario() -> None:
+        twilio = FakeTwilioSocket()
+        realtime = FakeRealtimeSession()
+        await realtime.incoming.put(audio_delta("response-1", "item-1"))
+        await realtime.incoming.put({"type": "input_audio_buffer.speech_started"})
+        await realtime.incoming.put(
+            {"type": "response.cancelled", "response": {"id": "response-1"}}
+        )
+        await realtime.incoming.put(audio_delta("response-2", "item-2"))
+        await realtime.incoming.put({"type": "input_audio_buffer.speech_started"})
+        await realtime.incoming.put(
+            {"type": "response.cancelled", "response": {"id": "response-2"}}
+        )
+        await realtime.incoming.put(RealtimeDisconnected("done"))
+
+        bridge = RealtimeAudioBridge(
+            twilio, realtime, media_session(), PcmuPassthroughCodec()
+        )
+        await bridge.run()
+
+        assert [message["event"] for message in twilio.sent] == [
+            "media",
+            "mark",
+            "clear",
+            "media",
+            "mark",
+            "clear",
+        ]
+        assert realtime.truncations == [
+            {"item_id": "item-1", "content_index": 0, "audio_end_ms": 0},
+            {"item_id": "item-2", "content_index": 0, "audio_end_ms": 0},
+        ]
+        assert bridge.playback.is_playing is False
+
+    asyncio.run(scenario())
+
+
+def test_stale_audio_does_not_leak_after_interruption() -> None:
+    async def scenario() -> None:
+        twilio = FakeTwilioSocket()
+        realtime = FakeRealtimeSession()
+        await realtime.incoming.put(audio_delta("response-1", "item-1"))
+        await realtime.incoming.put({"type": "input_audio_buffer.speech_started"})
+        await realtime.incoming.put(audio_delta("response-1", "item-1"))
+        await realtime.incoming.put(audio_delta("response-2", "item-2"))
+        await realtime.incoming.put(RealtimeDisconnected("done"))
+
+        bridge = RealtimeAudioBridge(
+            twilio, realtime, media_session(), PcmuPassthroughCodec()
+        )
+        await bridge.run()
+
+        media_messages = [
+            message for message in twilio.sent if message["event"] == "media"
+        ]
+        assert len(media_messages) == 2
+        assert realtime.truncations == [
+            {"item_id": "item-1", "content_index": 0, "audio_end_ms": 0}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_interruption_after_output_done_still_clears_unplayed_audio() -> None:
+    async def scenario() -> None:
+        twilio = FakeTwilioSocket()
+        realtime = FakeRealtimeSession()
+        await realtime.incoming.put(audio_delta("response-1", "item-1"))
+        await realtime.incoming.put(
+            {"type": "response.output_audio.done", "response_id": "response-1"}
+        )
+        await realtime.incoming.put({"type": "input_audio_buffer.speech_started"})
+        await realtime.incoming.put(RealtimeDisconnected("done"))
+
+        bridge = RealtimeAudioBridge(
+            twilio, realtime, media_session(), PcmuPassthroughCodec()
+        )
+        await bridge.run()
+
+        assert twilio.sent[-1] == {"event": "clear", "streamSid": STREAM_SID}
+        assert realtime.truncations == [
+            {"item_id": "item-1", "content_index": 0, "audio_end_ms": 0}
+        ]
 
     asyncio.run(scenario())

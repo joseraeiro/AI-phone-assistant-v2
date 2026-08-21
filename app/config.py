@@ -1,6 +1,7 @@
 """Environment-backed application configuration."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +31,11 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_realtime_model: str = "gpt-realtime-2.1"
     openai_realtime_voice: str = "marin"
+    openai_realtime_vad_type: Literal["semantic_vad", "server_vad"] = "semantic_vad"
+    openai_realtime_vad_eagerness: Literal["low", "medium", "high", "auto"] = "auto"
+    openai_realtime_vad_threshold: float = Field(default=0.5, ge=0, le=1)
+    openai_realtime_vad_prefix_padding_ms: int = Field(default=300, ge=0)
+    openai_realtime_vad_silence_duration_ms: int = Field(default=700, ge=100)
 
 
 @lru_cache

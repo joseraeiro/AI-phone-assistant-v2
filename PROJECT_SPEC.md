@@ -402,11 +402,16 @@ and shut down both relay tasks when either provider disconnects. Keep codec
 validation behind an `AudioCodec` boundary. Do not add tools, persistence,
 summaries, recording, approval, handoff, or a user interface.
 
-### Phase 4 — reserved integration increment
+### Phase 4 — natural turns and interruption
 
-Define this phase from the repository's working behavior and then-current
-product requirements. Do not duplicate Phase 1 call control or skip ahead to a
-later integration.
+Use current OpenAI server-side turn detection, defaulting to semantic VAD with
+configurable eagerness. Track each outgoing Twilio audio chunk with a mark and
+count only acknowledged marks as heard. On caller speech, rely on configured
+Realtime automatic response cancellation, truncate the assistant conversation
+item at the confirmed playback position, clear Twilio's buffered audio, reset
+local playback state, and suppress late deltas from the canceled response.
+Provide a concise deterministic first-utterance instruction. Do not add
+objectives, tools, persistence, recording, approval, handoff, or UI behavior.
 
 ### Phase 5 — reserved product increment
 

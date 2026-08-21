@@ -15,8 +15,14 @@ logger = logging.getLogger(__name__)
 
 REALTIME_ENDPOINT = "wss://api.openai.com/v1/realtime"
 INITIAL_INSTRUCTIONS = (
-    "You are having a telephone conversation. Speak naturally and concisely in "
-    "European Portuguese. Introduce yourself as José's virtual assistant."
+    "You are having a telephone conversation in European Portuguese. Use concise, "
+    "telephone-friendly sentences. Allow the other person to interrupt. Avoid "
+    "monologues, ask only one or two related questions at once, and do not repeat "
+    "yourself unnecessarily. You are José's virtual assistant, not José himself."
+)
+FIRST_UTTERANCE_INSTRUCTIONS = (
+    'Begin the call by saying exactly: "Boa tarde. Sou o assistente virtual do José." '
+    "Do not add anything else to this first utterance."
 )
 
 
@@ -101,11 +107,7 @@ class OpenAIRealtimeSession:
                     "audio": {
                         "input": {
                             "format": {"type": "audio/pcmu"},
-                            "turn_detection": {
-                                "type": "server_vad",
-                                "create_response": True,
-                                "interrupt_response": True,
-                            },
+                            "turn_detection": self._turn_detection(),
                         },
                         "output": {
                             "format": {"type": "audio/pcmu"},
@@ -115,12 +117,34 @@ class OpenAIRealtimeSession:
                 },
             }
         )
-        await self._send_event({"type": "response.create"})
+        await self._send_event(
+            {
+                "type": "response.create",
+                "response": {
+                    "output_modalities": ["audio"],
+                    "instructions": FIRST_UTTERANCE_INSTRUCTIONS,
+                },
+            }
+        )
 
     async def append_input_audio(self, payload: str) -> None:
         """Append one base64 PCMU chunk to the model input buffer."""
 
         await self._send_event({"type": "input_audio_buffer.append", "audio": payload})
+
+    async def truncate_conversation_item(
+        self, *, item_id: str, content_index: int, audio_end_ms: int
+    ) -> None:
+        """Remove assistant audio that Twilio did not confirm as played."""
+
+        await self._send_event(
+            {
+                "type": "conversation.item.truncate",
+                "item_id": item_id,
+                "content_index": content_index,
+                "audio_end_ms": audio_end_ms,
+            }
+        )
 
     async def receive_event(self) -> dict[str, Any]:
         """Receive one server event and turn disconnect/error states into exceptions."""
@@ -173,3 +197,23 @@ class OpenAIRealtimeSession:
         if self._socket is None:
             raise RealtimeDisconnected("OpenAI Realtime is not connected")
         return self._socket
+
+    def _turn_detection(self) -> dict[str, Any]:
+        common = {
+            "type": self.settings.openai_realtime_vad_type,
+            "create_response": True,
+            "interrupt_response": True,
+        }
+        if self.settings.openai_realtime_vad_type == "semantic_vad":
+            return {
+                **common,
+                "eagerness": self.settings.openai_realtime_vad_eagerness,
+            }
+        return {
+            **common,
+            "threshold": self.settings.openai_realtime_vad_threshold,
+            "prefix_padding_ms": (self.settings.openai_realtime_vad_prefix_padding_ms),
+            "silence_duration_ms": (
+                self.settings.openai_realtime_vad_silence_duration_ms
+            ),
+        }

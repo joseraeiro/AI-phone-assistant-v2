@@ -15,6 +15,7 @@ from app.services.openai_realtime import (
     RealtimeAPIError,
     RealtimeDisconnected,
 )
+from app.services.playback import AssistantPlaybackTracker
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class RealtimeAudioBridge:
         self.realtime = realtime
         self.media_session = media_session
         self.codec = codec
+        self.playback = AssistantPlaybackTracker()
 
     async def run(self) -> None:
         """Run both relay directions until either side stops or disconnects."""
@@ -93,6 +95,11 @@ class RealtimeAudioBridge:
                         logger.warning("MEDIA_STREAM_MALFORMED reason=%s", exc)
                         continue
                     await self.realtime.append_input_audio(encoded_audio)
+                elif message.get("event") == "mark":
+                    mark = message.get("mark")
+                    name = mark.get("name") if isinstance(mark, dict) else None
+                    if isinstance(name, str):
+                        self.playback.acknowledge_mark(name)
                 if not should_continue:
                     raise _BridgeFinished
         except WebSocketDisconnect as exc:
@@ -127,10 +134,35 @@ class RealtimeAudioBridge:
             event_type = event["type"]
             if event_type == "response.output_audio.delta":
                 delta = event.get("delta")
+                response_id = event.get("response_id")
+                item_id = event.get("item_id")
+                content_index = event.get("content_index", 0)
+                if (
+                    not isinstance(response_id, str)
+                    or not isinstance(item_id, str)
+                    or not isinstance(content_index, int)
+                ):
+                    logger.warning(
+                        "OPENAI_REALTIME_MALFORMED reason=audio_delta_identifiers"
+                    )
+                    continue
                 try:
                     encoded_audio = self.codec.openai_to_twilio(delta)
+                    duration_ms = self.codec.duration_ms(encoded_audio)
                 except InvalidAudioPayload as exc:
                     logger.warning("OPENAI_REALTIME_MALFORMED reason=%s", exc)
+                    continue
+                mark_name = self.playback.add_audio(
+                    response_id=response_id,
+                    item_id=item_id,
+                    content_index=content_index,
+                    duration_ms=duration_ms,
+                )
+                if mark_name is None:
+                    logger.debug(
+                        "OPENAI_REALTIME_STALE_AUDIO_DROPPED response_id=%s",
+                        response_id,
+                    )
                     continue
                 await self.twilio.send_json(
                     {
@@ -139,22 +171,73 @@ class RealtimeAudioBridge:
                         "media": {"payload": encoded_audio},
                     }
                 )
-            elif event_type == "input_audio_buffer.speech_started":
                 await self.twilio.send_json(
                     {
-                        "event": "clear",
+                        "event": "mark",
                         "streamSid": self.media_session.stream_sid,
+                        "mark": {"name": mark_name},
                     }
                 )
+            elif event_type == "input_audio_buffer.speech_started":
+                await self._interrupt_assistant()
+            elif event_type == "response.output_audio.done":
+                response_id = event.get("response_id")
+                if isinstance(response_id, str):
+                    self.playback.output_done(response_id)
+            elif event_type == "response.cancelled":
+                response_id = self._response_id(event)
+                if response_id is not None:
+                    self.playback.cancel_response(response_id)
+                logger.info("OPENAI_REALTIME_RESPONSE_CANCELLED")
+            elif event_type == "response.done":
+                response = event.get("response")
+                if isinstance(response, dict) and response.get("status") == "cancelled":
+                    response_id = self._response_id(event)
+                    if response_id is not None:
+                        self.playback.cancel_response(response_id)
+                    logger.info("OPENAI_REALTIME_RESPONSE_CANCELLED")
+                else:
+                    logger.debug("OPENAI_REALTIME_EVENT type=response.done")
             elif event_type == "rate_limits.updated":
                 logger.info("OPENAI_REALTIME_RATE_LIMITS_UPDATED")
             elif event_type in {
                 "session.created",
                 "session.updated",
                 "response.created",
-                "response.done",
-                "response.output_audio.done",
             }:
                 logger.debug("OPENAI_REALTIME_EVENT type=%s", event_type)
             else:
                 logger.debug("OPENAI_REALTIME_UNKNOWN_EVENT type=%s", event_type)
+
+    async def _interrupt_assistant(self) -> None:
+        point = self.playback.interrupt()
+        if point is None:
+            return
+        logger.info(
+            "ASSISTANT_INTERRUPTED item_id=%s audio_end_ms=%d",
+            point.item_id,
+            point.audio_end_ms,
+        )
+        try:
+            await self.realtime.truncate_conversation_item(
+                item_id=point.item_id,
+                content_index=point.content_index,
+                audio_end_ms=point.audio_end_ms,
+            )
+        finally:
+            await self.twilio.send_json(
+                {
+                    "event": "clear",
+                    "streamSid": self.media_session.stream_sid,
+                }
+            )
+
+    @staticmethod
+    def _response_id(event: dict[str, Any]) -> str | None:
+        response_id = event.get("response_id")
+        if isinstance(response_id, str):
+            return response_id
+        response = event.get("response")
+        if isinstance(response, dict) and isinstance(response.get("id"), str):
+            return response["id"]
+        return None

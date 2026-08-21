@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from app.config import Settings
 from app.services.openai_realtime import (
+    FIRST_UTTERANCE_INSTRUCTIONS,
     INITIAL_INSTRUCTIONS,
     MalformedRealtimeEvent,
     OpenAIRealtimeSession,
@@ -64,15 +65,79 @@ def test_connect_and_configure_current_pcmu_session() -> None:
             "input": {
                 "format": {"type": "audio/pcmu"},
                 "turn_detection": {
-                    "type": "server_vad",
+                    "type": "semantic_vad",
                     "create_response": True,
                     "interrupt_response": True,
+                    "eagerness": "auto",
                 },
             },
             "output": {"format": {"type": "audio/pcmu"}, "voice": "marin"},
         }
-        assert initial_response == {"type": "response.create"}
+        assert initial_response == {
+            "type": "response.create",
+            "response": {
+                "output_modalities": ["audio"],
+                "instructions": FIRST_UTTERANCE_INSTRUCTIONS,
+            },
+        }
         assert socket.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_server_vad_settings_are_configurable() -> None:
+    async def scenario() -> None:
+        socket = FakeRealtimeSocket()
+
+        async def connector(url: str, **kwargs: Any) -> FakeRealtimeSocket:
+            return socket
+
+        settings = realtime_settings().model_copy(
+            update={
+                "openai_realtime_vad_type": "server_vad",
+                "openai_realtime_vad_threshold": 0.6,
+                "openai_realtime_vad_prefix_padding_ms": 400,
+                "openai_realtime_vad_silence_duration_ms": 800,
+            }
+        )
+        session = OpenAIRealtimeSession(settings, connector=connector)
+        await session.connect()
+        await session.configure()
+
+        turn_detection = socket.sent[0]["session"]["audio"]["input"]["turn_detection"]
+        assert turn_detection == {
+            "type": "server_vad",
+            "create_response": True,
+            "interrupt_response": True,
+            "threshold": 0.6,
+            "prefix_padding_ms": 400,
+            "silence_duration_ms": 800,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_truncate_conversation_item_uses_confirmed_playback_boundary() -> None:
+    async def scenario() -> None:
+        socket = FakeRealtimeSocket()
+
+        async def connector(url: str, **kwargs: Any) -> FakeRealtimeSocket:
+            return socket
+
+        session = OpenAIRealtimeSession(realtime_settings(), connector=connector)
+        await session.connect()
+        await session.truncate_conversation_item(
+            item_id="item-1", content_index=0, audio_end_ms=240
+        )
+
+        assert socket.sent == [
+            {
+                "type": "conversation.item.truncate",
+                "item_id": "item-1",
+                "content_index": 0,
+                "audio_end_ms": 240,
+            }
+        ]
 
     asyncio.run(scenario())
 

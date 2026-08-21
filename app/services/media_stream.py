@@ -154,7 +154,7 @@ class MediaStreamSession:
     def _handle_mark(self, message: dict[str, Any]) -> None:
         mark = _mapping(message.get("mark"), "mark")
         name = _non_empty_string(mark.get("name"), "mark.name")
-        logger.info(
+        logger.debug(
             "MEDIA_MARK_RECEIVED call_sid=%s stream_sid=%s name=%s",
             self.call_sid,
             self.stream_sid,
