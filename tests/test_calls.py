@@ -112,6 +112,19 @@ def test_dry_run_does_not_call_twilio() -> None:
     twilio_client.calls.create.assert_not_called()
 
 
+def test_end_call_uses_twilio_completed_status() -> None:
+    twilio_client = Mock()
+    settings = Settings(
+        twilio_account_sid="ACtest",
+        twilio_auth_token=SecretStr("secret"),
+    )
+
+    OutboundCallService(settings, twilio_client).end("CA123")
+
+    twilio_client.calls.assert_called_once_with("CA123")
+    twilio_client.calls.return_value.update.assert_called_once_with(status="completed")
+
+
 def test_dry_run_endpoint_returns_simulated_result(client: TestClient) -> None:
     app.dependency_overrides[get_call_service] = lambda: OutboundCallService(
         Settings(dry_run=True)

@@ -46,7 +46,9 @@ async def create_call(
     )
     runtime = store.add(configuration)
     await repository.create_call(
-        configuration, openai_model=settings.openai_realtime_model
+        configuration,
+        openai_model=settings.openai_realtime_model,
+        openai_voice=settings.openai_realtime_voice,
     )
     runtime.persistence_enabled = True
     await repository.record_event(

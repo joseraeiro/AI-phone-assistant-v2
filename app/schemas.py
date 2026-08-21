@@ -30,6 +30,14 @@ class CallCreate(BaseModel):
         str, StringConstraints(strip_whitespace=True, min_length=2, max_length=35)
     ] = "pt-PT"
     authorized_actions: frozenset[AuthorizedAction] = frozenset()
+    realtime_model: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ] = None
+    voice: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ] = None
 
 
 class CallCreated(BaseModel):

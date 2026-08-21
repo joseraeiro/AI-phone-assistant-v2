@@ -44,6 +44,8 @@ class CallConfiguration(BaseModel):
     constraints: str = Field(default="", max_length=5_000)
     language: NonEmptyText = "pt-PT"
     authorized_actions: frozenset[AuthorizedAction] = frozenset()
+    realtime_model: str | None = Field(default=None, max_length=100)
+    voice: str | None = Field(default=None, max_length=100)
 
 
 class SavedFact(BaseModel):

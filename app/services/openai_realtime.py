@@ -70,19 +70,23 @@ class OpenAIRealtimeSession:
         self._closed = False
         self._agent_instructions: str | None = None
         self._first_utterance_instructions: str | None = None
+        self._model = settings.openai_realtime_model
+        self._voice = settings.openai_realtime_voice
 
     def configure_agent(self, call: CallConfiguration) -> None:
         """Attach the centralized prompt and allowlisted tools before connecting."""
 
         self._agent_instructions = build_agent_instructions(call)
         self._first_utterance_instructions = build_first_utterance_instructions(call)
+        self._model = call.realtime_model or self.settings.openai_realtime_model
+        self._voice = call.voice or self.settings.openai_realtime_voice
 
     async def connect(self) -> None:
         """Open an authenticated server-to-server Realtime WebSocket."""
 
         if self.settings.openai_api_key is None:
             raise RealtimeConfigurationError("OPENAI_API_KEY is required")
-        query = urlencode({"model": self.settings.openai_realtime_model})
+        query = urlencode({"model": self._model})
         try:
             self._socket = await self._connector(
                 f"{REALTIME_ENDPOINT}?{query}",
@@ -95,7 +99,7 @@ class OpenAIRealtimeSession:
         except (OSError, WebSocketException) as exc:
             raise RealtimeDisconnected("OpenAI Realtime connection failed") from exc
         logger.info(
-            "OPENAI_REALTIME_CONNECTED model=%s", self.settings.openai_realtime_model
+            "OPENAI_REALTIME_CONNECTED model=%s", self._model
         )
 
     async def configure(self) -> None:
@@ -111,7 +115,7 @@ class OpenAIRealtimeSession:
                 "type": "session.update",
                 "session": {
                     "type": "realtime",
-                    "model": self.settings.openai_realtime_model,
+                    "model": self._model,
                     "instructions": self._agent_instructions,
                     "output_modalities": ["audio"],
                     "tools": realtime_tool_definitions(),
@@ -126,7 +130,7 @@ class OpenAIRealtimeSession:
                         },
                         "output": {
                             "format": {"type": "audio/pcmu"},
-                            "voice": self.settings.openai_realtime_voice,
+                            "voice": self._voice,
                         },
                     },
                 },

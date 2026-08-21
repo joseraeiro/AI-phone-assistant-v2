@@ -1,7 +1,7 @@
 """Twilio REST operations isolated behind an application service."""
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from twilio.rest import Client
@@ -78,6 +78,20 @@ class OutboundCallService:
             status=str(call.status or "queued"),
             internal_call_id=internal_call_id,
         )
+
+    def end(self, call_sid: str) -> None:
+        """Idempotently request termination of an active provider call."""
+
+        if self.settings.dry_run or call_sid == "DRY_RUN":
+            return
+        account_sid = self.settings.twilio_account_sid
+        auth_token = self.settings.twilio_auth_token
+        if not account_sid or auth_token is None:
+            raise ConfigurationError("Twilio credentials are required")
+        client: Any = self._client or Client(
+            account_sid, auth_token.get_secret_value()
+        )
+        client.calls(call_sid).update(status="completed")
 
     def _validated_base_url(self) -> str:
         base_url = (self.settings.app_base_url or "").rstrip("/")

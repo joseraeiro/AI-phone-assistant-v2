@@ -9,14 +9,14 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 6**. It creates an outbound Twilio call,
+The repository is currently at **Phase 7**. It creates an outbound Twilio call,
 connects the answered call to a bidirectional Media Stream, and bridges telephone
 audio to an interruptible, goal-directed OpenAI Realtime agent. Each call carries
 its own objective, context, preferences, constraints, language, and explicit
 authority grants. The agent remains non-binding by default and has only three
 internal tools. Calls, canonical final transcripts, captured facts, and
 meaningful lifecycle events are durable in SQLite. The application does not
-record audio and does not implement summaries, approval, handoff, or a frontend.
+record audio and does not implement summaries, approval, or handoff.
 
 ## Requirements
 
@@ -33,6 +33,13 @@ uv sync
 cp .env.example .env
 uv run uvicorn app.main:app --reload
 ```
+
+Open `http://localhost:8000/` for the server-rendered dashboard. **New Call**
+opens a form which creates and immediately starts the outbound call, then moves
+to its detail page. The detail page receives status, canonical transcript,
+fact, objective-status, and significant-event snapshots over Server-Sent
+Events. It never receives raw audio. **End Call** requests a Twilio hangup and
+is safe to press more than once.
 
 The equivalent configured host and port command is:
 
@@ -244,3 +251,14 @@ out of order do not reorder the conversation. Audio packets and live WebSocket
 objects are never written to SQLite.
 
 - [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
+
+## Web interface
+
+The interface uses Jinja2 templates, plain CSS, and small vanilla JavaScript
+modules under `app/templates` and `app/static`. There is no browser build step.
+Jinja autoescaping and DOM `textContent` protect provider/model text when it is
+rendered. Provider credentials and authenticated media never enter page data.
+
+The dashboard lists recent calls and historical detail pages remain available
+after restart because they read SQLite rather than the process-local call
+store. The summary panel is deliberately a placeholder until a later phase.

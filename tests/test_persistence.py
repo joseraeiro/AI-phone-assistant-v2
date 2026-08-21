@@ -33,7 +33,9 @@ def test_history_order_idempotency_and_restart_durability(tmp_path: Path) -> Non
         database = Database(url)
         await database.create_schema()
         repository = CallRepository(database)
-        row = await repository.create_call(call, openai_model="gpt-realtime-2.1")
+        row = await repository.create_call(
+            call, openai_model="gpt-realtime-2.1", openai_voice="marin"
+        )
         assert row.created_at.tzinfo is UTC
         await repository.update_call(
             call.internal_call_id,

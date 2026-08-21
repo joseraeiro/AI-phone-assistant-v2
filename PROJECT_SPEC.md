@@ -436,11 +436,16 @@ transcript order. Historical database state is authoritative, while live
 WebSockets, playback tracking, and relay tasks remain process-local. Do not add
 recording, summaries, approval, handoff, or a frontend.
 
-### Phase 7 — controlled end-to-end operation
+### Phase 7 — minimal web interface
 
-Add opt-in live integration, operational safeguards, summaries/outcomes,
-timeouts, observability, and a documented manual smoke test. Keep actions
-non-binding unless a later, separately specified phase adds capability tools.
+Add a Jinja2, vanilla JavaScript, and CSS dashboard, new-call form, and durable
+call-detail view. The existing `POST /calls` remains the combined create/start
+operation. Use Server-Sent Events containing small database snapshots for live
+status, final transcripts, facts, objective state, and important events; never
+send raw audio to the browser. Provide an idempotent owner hangup endpoint and
+clear human-readable lifecycle labels. Preserve escaping and keep credentials
+server-side. Summary remains a placeholder; do not add recording, actual
+summarization, a frontend framework, or multi-user authentication.
 
 ### Later phases
 

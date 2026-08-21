@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -24,6 +25,19 @@ class Database:
     async def create_schema(self) -> None:
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            columns = await connection.run_sync(
+                lambda sync_connection: {
+                    column["name"]
+                    for column in inspect(sync_connection).get_columns("calls")
+                }
+            )
+            if "openai_voice" not in columns:
+                await connection.execute(
+                    text(
+                        "ALTER TABLE calls ADD COLUMN openai_voice "
+                        "VARCHAR(100) NOT NULL DEFAULT 'marin'"
+                    )
+                )
 
     async def dispose(self) -> None:
         await self.engine.dispose()

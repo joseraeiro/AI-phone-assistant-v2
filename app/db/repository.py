@@ -20,7 +20,7 @@ class CallRepository:
         self.database = database
 
     async def create_call(
-        self, call: CallConfiguration, *, openai_model: str
+        self, call: CallConfiguration, *, openai_model: str, openai_voice: str
     ) -> Call:
         row = Call(
             id=str(call.internal_call_id),
@@ -34,7 +34,8 @@ class CallRepository:
             authorized_actions=json.dumps(sorted(call.authorized_actions)),
             status="created",
             objective_status="unknown",
-            openai_model=openai_model,
+            openai_model=call.realtime_model or openai_model,
+            openai_voice=call.voice or openai_voice,
         )
         async with self.database.session() as session:
             session.add(row)
@@ -175,5 +176,15 @@ class CallRepository:
                     select(CapturedFact)
                     .where(CapturedFact.call_id == str(call_id))
                     .order_by(CapturedFact.created_at, CapturedFact.id)
+                )
+            )
+
+    async def recent_calls(self, *, limit: int = 50) -> list[Call]:
+        """Return newest calls for the dashboard."""
+
+        async with self.database.session() as session:
+            return list(
+                await session.scalars(
+                    select(Call).order_by(Call.created_at.desc()).limit(limit)
                 )
             )

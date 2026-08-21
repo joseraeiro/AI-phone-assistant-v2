@@ -72,6 +72,7 @@ class Call(Base):
     )
     twilio_stream_sid: Mapped[str | None] = mapped_column(String(64), index=True)
     openai_model: Mapped[str] = mapped_column(String(100))
+    openai_voice: Mapped[str] = mapped_column(String(100), default="marin")
 
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
