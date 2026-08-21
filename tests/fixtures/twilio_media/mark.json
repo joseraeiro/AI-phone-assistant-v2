@@ -1,0 +1,8 @@
+{
+  "event": "mark",
+  "sequenceNumber": "4",
+  "streamSid": "MZ11111111111111111111111111111111",
+  "mark": {
+    "name": "test-mark"
+  }
+}
