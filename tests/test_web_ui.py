@@ -1,15 +1,20 @@
-"""Important server-rendered Phase 7 routes."""
+"""Important server-rendered Phase 7 and report routes."""
 
+import asyncio
 from collections.abc import Iterator
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
+from app.db.repository import CallRepository
 from app.main import app
 from app.routers.calls import get_call_service
 from app.services.call_store import CallStore, get_call_store
+from app.services.post_call_summary import get_summary_service
 from app.services.twilio import OutboundCallService
 
 
@@ -78,7 +83,7 @@ def test_dashboard_new_call_and_detail_templates(web_client: TestClient) -> None
     assert "Loja &lt;script&gt;alert(1)&lt;/script&gt;" in dashboard.text
     assert "Loja <script>" not in dashboard.text
     assert detail.status_code == 200
-    assert "Summary will be available in a later phase." in detail.text
+    assert "The report will be generated after the call." in detail.text
     assert "Transcript" in detail.text
     assert "Facts" in detail.text
     assert "Events" in detail.text
@@ -103,3 +108,76 @@ def test_unknown_call_detail_returns_not_found(web_client: TestClient) -> None:
     response = web_client.get("/calls/12345678-1234-5678-1234-567812345678")
 
     assert response.status_code == 404
+
+
+def test_generated_report_renders_on_detail_page(
+    web_client: TestClient, isolated_database: CallRepository
+) -> None:
+    call_id = create_call(web_client)
+    report = (
+        '{"objective_status":"success","summary":"Horário confirmado.",'
+        '"information_obtained":[{"text":"Fecha às 18:00",'
+        '"certainty":"confirmed"}],"actions_taken":["Consultou o horário"],'
+        '"commitments":[],"follow_up":[],"important_numbers":{'
+        '"prices":[],"dates":[],"times":[],"reference_numbers":[]}}'
+    )
+    asyncio.run(
+        isolated_database.update_call(
+            call_id,
+            status="completed",
+            summary_status="completed",
+            summary_json=report,
+            summary_text="Horário confirmado.",
+        )
+    )
+
+    detail = web_client.get(f"/calls/{call_id}")
+
+    assert detail.status_code == 200
+    assert "Horário confirmado." in detail.text
+    assert "Fecha às 18:00" in detail.text
+    assert "Consultou o horário" in detail.text
+
+
+def test_duplicate_completed_callbacks_schedule_one_report(
+    web_client: TestClient, isolated_database: CallRepository
+) -> None:
+    call_id = create_call(web_client)
+    asyncio.run(
+        isolated_database.update_call(call_id, twilio_call_sid="CA-summary-test")
+    )
+    summary = SimpleNamespace(generate=AsyncMock(return_value=True))
+    app.dependency_overrides[get_summary_service] = lambda: summary
+
+    first = web_client.post(
+        "/twilio/call-status",
+        data={"CallSid": "CA-summary-test", "CallStatus": "completed"},
+    )
+    second = web_client.post(
+        "/twilio/call-status",
+        data={"CallSid": "CA-summary-test", "CallStatus": "completed"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    summary.generate.assert_awaited_once_with(call_id)
+
+
+def test_failed_report_exposes_retry_control(
+    web_client: TestClient, isolated_database: CallRepository
+) -> None:
+    call_id = create_call(web_client)
+    asyncio.run(
+        isolated_database.update_call(
+            call_id,
+            status="completed",
+            summary_status="failed",
+            summary_error="Summary generation failed (RuntimeError)",
+        )
+    )
+
+    detail = web_client.get(f"/calls/{call_id}")
+
+    assert detail.status_code == 200
+    assert "Summary generation failed (RuntimeError)" in detail.text
+    assert 'id="retry-summary"' in detail.text

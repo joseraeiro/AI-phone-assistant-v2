@@ -45,6 +45,10 @@ def test_history_order_idempotency_and_restart_durability(tmp_path: Path) -> Non
             started_at=utc_now(),
             answered_at=utc_now(),
             ended_at=utc_now(),
+            summary_json='{"summary":"Horário confirmado"}',
+            summary_text="Horário confirmado",
+            summary_generated_at=utc_now(),
+            summary_status="completed",
         )
         assert await repository.record_event(
             call.internal_call_id, "CALL_COMPLETED", dedupe_key="completed"
@@ -84,6 +88,9 @@ def test_history_order_idempotency_and_restart_durability(tmp_path: Path) -> Non
         assert row.objective == "Confirmar horários"
         assert row.status == "completed"
         assert row.ended_at is not None and row.ended_at.tzinfo is UTC
+        assert row.summary_text == "Horário confirmado"
+        assert row.summary_generated_at is not None
+        assert row.summary_generated_at.tzinfo is UTC
         assert [entry.sequence for entry in await repository.transcripts(row.id)] == [
             1,
             2,

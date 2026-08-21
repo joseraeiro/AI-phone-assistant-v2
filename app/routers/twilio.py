@@ -5,7 +5,16 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, Request, Response, WebSocket
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Form,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+)
 from fastapi.websockets import WebSocketDisconnect, WebSocketState
 from twilio.twiml.voice_response import VoiceResponse
 
@@ -32,6 +41,7 @@ from app.services.openai_realtime import (
     OpenAIRealtimeSession,
     RealtimeConfigurationError,
 )
+from app.services.post_call_summary import PostCallSummaryService, get_summary_service
 from app.services.realtime_bridge import RealtimeAudioBridge
 
 logger = logging.getLogger(__name__)
@@ -187,9 +197,13 @@ async def media_stream(
     dependencies=[Depends(validate_twilio_request)],
 )
 async def call_status(
+    background_tasks: BackgroundTasks,
     call_sid: Annotated[str, Form(alias="CallSid", min_length=1, max_length=64)],
     call_status: Annotated[str, Form(alias="CallStatus", min_length=1, max_length=32)],
     repository: Annotated[CallRepository, Depends(get_call_repository)],
+    summary_service: Annotated[
+        PostCallSummaryService, Depends(get_summary_service)
+    ],
 ) -> StatusReceived:
     """Acknowledge and clearly log a Twilio lifecycle callback."""
 
@@ -233,4 +247,6 @@ async def call_status(
             if event_type == "CALL_FAILED":
                 updates["error_message"] = f"Twilio call ended with {call_status}"
             await repository.update_call(call.id, **updates)
+        if inserted and call_status == "completed":
+            background_tasks.add_task(summary_service.generate, call.id)
     return StatusReceived(call_sid=call_sid, status=call_status)

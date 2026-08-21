@@ -447,6 +447,20 @@ clear human-readable lifecycle labels. Preserve escaping and keep credentials
 server-side. Summary remains a placeholder; do not add recording, actual
 summarization, a frontend framework, or multi-user authentication.
 
+### Phase 8 — structured post-call report
+
+After a completed-call callback, generate one structured report through the
+OpenAI Responses API using a separate, environment-selected low-cost text
+model. Supply only durable call configuration, canonical transcript, captured
+facts, objective state, explicit authority, and meaningful tool outcomes. Parse
+the response directly into a strict Pydantic schema and preserve confirmed,
+uncertain, and not-obtained distinctions. Never infer unsupported facts or
+commitments. Atomically claim generation so duplicate callbacks cannot cause
+multiple requests. Persist JSON, display text, UTC generation time, status, and
+a separate error. Failures must not change completed call state or transcript
+and must be retryable. Render the report in the existing detail view. Do not add
+recording, another frontend framework, or new agent tools.
+
 ### Later phases
 
 Potential work includes stronger owner authentication, deployment hardening,

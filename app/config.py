@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     openai_realtime_model: str = "gpt-realtime-2.1"
     openai_realtime_voice: str = "marin"
     openai_transcription_model: str = "gpt-live-transcribe"
+    openai_summary_model: str = "gpt-5.6-luna"
     openai_realtime_vad_type: Literal["semantic_vad", "server_vad"] = "semantic_vad"
     openai_realtime_vad_eagerness: Literal["low", "medium", "high", "auto"] = "auto"
     openai_realtime_vad_threshold: float = Field(default=0.5, ge=0, le=1)

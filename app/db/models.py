@@ -79,6 +79,11 @@ class Call(Base):
     answered_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     error_message: Mapped[str | None] = mapped_column(Text)
+    summary_json: Mapped[str | None] = mapped_column(Text)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    summary_generated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    summary_error: Mapped[str | None] = mapped_column(Text)
+    summary_status: Mapped[str] = mapped_column(String(16), default="pending")
 
     transcripts: Mapped[list["TranscriptEntry"]] = relationship(
         back_populates="call", cascade="all, delete-orphan"

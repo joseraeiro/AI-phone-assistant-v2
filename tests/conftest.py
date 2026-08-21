@@ -13,7 +13,7 @@ from app.main import app
 
 
 @pytest.fixture(autouse=True)
-def isolated_database(tmp_path: Path) -> Iterator[None]:
+def isolated_database(tmp_path: Path) -> Iterator[CallRepository]:
     """Prevent tests from sharing lifecycle rows through the default SQLite file."""
 
     path = tmp_path / "test.db"
@@ -21,6 +21,6 @@ def isolated_database(tmp_path: Path) -> Iterator[None]:
     asyncio.run(database.create_schema())
     repository = CallRepository(database)
     app.dependency_overrides[get_call_repository] = lambda: repository
-    yield
+    yield repository
     app.dependency_overrides.pop(get_call_repository, None)
     asyncio.run(database.dispose())

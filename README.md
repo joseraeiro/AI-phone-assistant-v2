@@ -9,14 +9,15 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 7**. It creates an outbound Twilio call,
+The repository is currently at **Phase 8**. It creates an outbound Twilio call,
 connects the answered call to a bidirectional Media Stream, and bridges telephone
 audio to an interruptible, goal-directed OpenAI Realtime agent. Each call carries
 its own objective, context, preferences, constraints, language, and explicit
 authority grants. The agent remains non-binding by default and has only three
 internal tools. Calls, canonical final transcripts, captured facts, and
 meaningful lifecycle events are durable in SQLite. The application does not
-record audio and does not implement summaries, approval, or handoff.
+record audio and does not implement approval or handoff. Completed calls receive
+a structured post-call report generated through the OpenAI Responses API.
 
 ## Requirements
 
@@ -261,4 +262,30 @@ rendered. Provider credentials and authenticated media never enter page data.
 
 The dashboard lists recent calls and historical detail pages remain available
 after restart because they read SQLite rather than the process-local call
-store. The summary panel is deliberately a placeholder until a later phase.
+store.
+
+## Post-call reports
+
+After Twilio reports a call as completed, the application submits the objective,
+call configuration, canonical transcript, captured facts, objective state, and
+important tool outcomes to the OpenAI Responses API. `OPENAI_SUMMARY_MODEL`
+defaults to `gpt-5.6-luna`, the current efficient high-volume GPT-5.6 variant;
+it is intentionally separate from the Realtime voice model.
+
+The Responses SDK parses directly into a strict Pydantic schema. Information
+and important numbers carry `confirmed`, `uncertain`, or `not_obtained`
+certainty, and the instructions prohibit inventing evidence or upgrading
+uncertainty. Commitments must remain empty unless both explicit authority and
+call evidence establish one.
+
+Generation is atomically claimed in SQLite. Duplicate completion callbacks do
+not make duplicate model requests. A successful report stores structured JSON,
+display text, and its UTC generation time. A failure leaves the call completed
+and its transcript intact, records a separate report error, and exposes a retry
+button on the call page.
+
+Official implementation references:
+
+- [Responses API text generation](https://developers.openai.com/api/docs/guides/text)
+- [Structured model outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [Current model guidance](https://developers.openai.com/api/docs/guides/latest-model)

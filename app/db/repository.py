@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import Database
@@ -63,6 +63,11 @@ class CallRepository:
             "answered_at",
             "ended_at",
             "error_message",
+            "summary_json",
+            "summary_text",
+            "summary_generated_at",
+            "summary_error",
+            "summary_status",
         }
         if not values.keys() <= allowed:
             raise ValueError("Unsupported call update")
@@ -188,3 +193,18 @@ class CallRepository:
                     select(Call).order_by(Call.created_at.desc()).limit(limit)
                 )
             )
+
+    async def claim_summary(self, call_id: UUID | str) -> bool:
+        """Atomically claim an absent or failed report for generation."""
+
+        async with self.database.session() as session:
+            result = await session.execute(
+                update(Call)
+                .where(
+                    Call.id == str(call_id),
+                    Call.summary_status.in_(("pending", "failed")),
+                )
+                .values(summary_status="generating", summary_error=None)
+            )
+            await session.commit()
+            return bool(result.rowcount)

@@ -347,7 +347,7 @@ class RealtimeAudioBridge:
     ) -> None:
         await self._event(
             "TOOL_COMPLETED",
-            payload={"name": name, "ok": result.get("ok", True)},
+            payload={"name": name, "ok": result.get("ok", True), "result": result},
             dedupe_key=f"tool-completed:{call_id}",
         )
         if self.history is None:

@@ -1,5 +1,50 @@
 const source = new EventSource(`/calls/${window.callId}/events`);
 
+function addReportList(parent, heading, rows, value) {
+  const title = document.createElement("h3");
+  const list = document.createElement("ul");
+  title.textContent = heading;
+  (rows.length ? rows : ["None"]).forEach((row) => {
+    const item = document.createElement("li");
+    item.textContent = value(row);
+    list.append(item);
+  });
+  parent.append(title, list);
+}
+
+function renderSummary(call) {
+  const report = document.querySelector("#summary-report");
+  if (call.summary) {
+    report.replaceChildren();
+    const objectiveTitle = document.createElement("strong");
+    const objective = document.createElement("p");
+    const resultTitle = document.createElement("strong");
+    const result = document.createElement("p");
+    objectiveTitle.textContent = "Objective";
+    objective.textContent = call.objective;
+    resultTitle.textContent = "Result";
+    result.textContent = call.summary.summary;
+    report.append(objectiveTitle, objective, resultTitle, result);
+    addReportList(report, "Information obtained", call.summary.information_obtained,
+      (row) => `${row.text} · ${row.certainty}`);
+    addReportList(report, "Actions taken", call.summary.actions_taken, (row) => row);
+    addReportList(report, "Follow-up", call.summary.follow_up,
+      (row) => `${row.text} · ${row.certainty}`);
+  } else if (call.summary_status === "failed") {
+    report.replaceChildren();
+    const message = document.createElement("p");
+    const retry = document.createElement("button");
+    message.className = "error";
+    message.textContent = call.summary_error;
+    retry.id = "retry-summary";
+    retry.className = "button";
+    retry.textContent = "Retry report";
+    report.append(message, retry);
+  } else if (call.status === "completed") {
+    report.textContent = "Generating report…";
+  }
+}
+
 function replaceList(id, rows, render, emptyText) {
   const list = document.querySelector(id);
   list.replaceChildren();
@@ -22,6 +67,7 @@ source.addEventListener("call", (event) => {
   document.querySelector("#duration").textContent = call.duration === null ? "—" : `${call.duration}s`;
   document.querySelector("#ended-at").textContent = call.ended_at || "—";
   document.querySelector("#end-call").hidden = ["completed", "failed", "busy", "no-answer", "canceled"].includes(call.status);
+  renderSummary(call);
   replaceList("#transcript", call.transcripts, (row) => {
     const li = document.createElement("li");
     const speaker = document.createElement("span");
@@ -56,4 +102,10 @@ document.querySelector("#end-call").addEventListener("click", async () => {
   button.disabled = true;
   const response = await fetch(`/calls/${window.callId}/end`, {method: "POST"});
   if (!response.ok) button.disabled = false;
+});
+
+document.querySelector("#summary-card").addEventListener("click", async (event) => {
+  if (event.target.id !== "retry-summary") return;
+  event.target.disabled = true;
+  await fetch(`/calls/${window.callId}/summary/retry`, {method: "POST"});
 });

@@ -16,6 +16,7 @@ from app.db.dependencies import get_call_repository
 from app.db.models import Call, utc_now
 from app.db.repository import CallRepository
 from app.routers.calls import get_call_service
+from app.services.post_call_summary import PostCallSummaryService, get_summary_service
 from app.services.twilio import ConfigurationError, OutboundCallService
 
 router = APIRouter(tags=["web"])
@@ -85,7 +86,31 @@ async def call_detail(
             "duration": _duration(call),
             "status_label": _status_label(call.status),
             "is_terminal": call.status in TERMINAL_STATUSES,
+            "summary": json.loads(call.summary_json) if call.summary_json else None,
         },
+    )
+
+
+@router.post("/calls/{call_id}/summary/retry")
+async def retry_summary(
+    call_id: UUID,
+    repository: Annotated[CallRepository, Depends(get_call_repository)],
+    service: Annotated[PostCallSummaryService, Depends(get_summary_service)],
+) -> JSONResponse:
+    """Retry a failed report without changing the completed call state."""
+
+    call = await repository.get_call(call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if call.status != "completed":
+        raise HTTPException(status_code=409, detail="Call is not completed")
+    generated = await service.generate(call_id)
+    refreshed = await repository.get_call(call_id)
+    return JSONResponse(
+        {
+            "generated": generated,
+            "summary_status": refreshed.summary_status if refreshed else "failed",
+        }
     )
 
 
@@ -155,10 +180,14 @@ async def _snapshot(repository: CallRepository, call_id: UUID) -> dict[str, Any]
     events = await repository.events(call_id)
     return {
         "status": call.status,
+        "objective": call.objective,
         "status_label": _status_label(call.status),
         "objective_status": call.objective_status,
         "ended_at": _iso(call.ended_at),
         "duration": _duration(call),
+        "summary_status": call.summary_status,
+        "summary_error": call.summary_error,
+        "summary": json.loads(call.summary_json) if call.summary_json else None,
         "transcripts": [
             {"id": row.id, "speaker": row.speaker, "text": row.text}
             for row in transcripts

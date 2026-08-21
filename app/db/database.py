@@ -31,13 +31,19 @@ class Database:
                     for column in inspect(sync_connection).get_columns("calls")
                 }
             )
-            if "openai_voice" not in columns:
-                await connection.execute(
-                    text(
-                        "ALTER TABLE calls ADD COLUMN openai_voice "
-                        "VARCHAR(100) NOT NULL DEFAULT 'marin'"
+            additions = {
+                "openai_voice": "VARCHAR(100) NOT NULL DEFAULT 'marin'",
+                "summary_json": "TEXT",
+                "summary_text": "TEXT",
+                "summary_generated_at": "DATETIME",
+                "summary_error": "TEXT",
+                "summary_status": "VARCHAR(16) NOT NULL DEFAULT 'pending'",
+            }
+            for name, declaration in additions.items():
+                if name not in columns:
+                    await connection.execute(
+                        text(f"ALTER TABLE calls ADD COLUMN {name} {declaration}")
                     )
-                )
 
     async def dispose(self) -> None:
         await self.engine.dispose()
