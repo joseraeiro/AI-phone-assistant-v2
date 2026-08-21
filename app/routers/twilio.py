@@ -11,9 +11,13 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from app.agent.tools import ToolDispatcher
 from app.config import Settings, get_settings
+from app.db.dependencies import get_call_repository
+from app.db.models import utc_now
+from app.db.repository import CallRepository
 from app.schemas import StatusReceived
 from app.security import twilio_webhook_guard, validate_twilio_websocket
 from app.services.audio_codec import PcmuPassthroughCodec
+from app.services.call_history import CallHistory
 from app.services.call_store import (
     CallNotFoundError,
     CallStore,
@@ -93,6 +97,7 @@ async def media_stream(
     settings: Annotated[Settings, Depends(get_settings)],
     realtime: Annotated[OpenAIRealtimeSession, Depends(get_realtime_session)],
     store: Annotated[CallStore, Depends(get_call_store)],
+    repository: Annotated[CallRepository, Depends(get_call_repository)],
 ) -> None:
     """Bridge one authenticated Twilio media connection to OpenAI Realtime."""
 
@@ -129,12 +134,30 @@ async def media_stream(
                     await websocket.close(code=1008)
                     return
                 realtime.configure_agent(runtime.configuration)
+                history = (
+                    CallHistory(repository, internal_call_id)
+                    if runtime.persistence_enabled
+                    else None
+                )
+                if history is not None:
+                    await history.update_call(
+                        twilio_call_sid=session.call_sid,
+                        twilio_stream_sid=session.stream_sid,
+                        status="in-progress",
+                        answered_at=utc_now(),
+                    )
+                    await history.event(
+                        "STREAM_STARTED",
+                        payload={"stream_sid": session.stream_sid},
+                        dedupe_key=f"stream-started:{session.stream_sid}",
+                    )
                 bridge = RealtimeAudioBridge(
                     twilio=websocket,
                     realtime=realtime,
                     media_session=session,
                     codec=PcmuPassthroughCodec(),
                     tool_dispatcher=ToolDispatcher(runtime),
+                    history=history,
                 )
                 try:
                     await bridge.run()
@@ -166,6 +189,7 @@ async def media_stream(
 async def call_status(
     call_sid: Annotated[str, Form(alias="CallSid", min_length=1, max_length=64)],
     call_status: Annotated[str, Form(alias="CallStatus", min_length=1, max_length=32)],
+    repository: Annotated[CallRepository, Depends(get_call_repository)],
 ) -> StatusReceived:
     """Acknowledge and clearly log a Twilio lifecycle callback."""
 
@@ -179,4 +203,34 @@ async def call_status(
             call_sid,
             call_status,
         )
+    call = await repository.get_call_by_twilio_sid(call_sid)
+    if call is not None and call_status in CALL_STATUSES:
+        event_type = {
+            "queued": "CALL_REQUESTED",
+            "initiated": "CALL_REQUESTED",
+            "ringing": "CALL_RINGING",
+            "in-progress": "CALL_ANSWERED",
+            "completed": "CALL_COMPLETED",
+            "busy": "CALL_FAILED",
+            "failed": "CALL_FAILED",
+            "no-answer": "CALL_FAILED",
+            "canceled": "CALL_FAILED",
+        }[call_status]
+        dedupe_key = event_type.lower().replace("_", "-")
+        inserted = await repository.record_event(
+            call.id,
+            event_type,
+            payload={"call_sid": call_sid, "status": call_status},
+            dedupe_key=dedupe_key,
+        )
+        if inserted:
+            updates: dict[str, object] = {"status": call_status}
+            now = utc_now()
+            if call_status == "in-progress":
+                updates["answered_at"] = now
+            if call_status in {"completed", "busy", "failed", "no-answer", "canceled"}:
+                updates["ended_at"] = now
+            if event_type == "CALL_FAILED":
+                updates["error_message"] = f"Twilio call ended with {call_status}"
+            await repository.update_call(call.id, **updates)
     return StatusReceived(call_sid=call_sid, status=call_status)

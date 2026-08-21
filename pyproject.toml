@@ -5,9 +5,11 @@ description = "Incrementally developed personal AI telephone agent"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.21,<1",
     "fastapi>=0.116,<1",
     "pydantic-settings>=2.10,<3",
     "python-multipart>=0.0.20,<1",
+    "sqlalchemy>=2.0.43,<3",
     "twilio>=9.7,<10",
     "uvicorn[standard]>=0.35,<1",
     "websockets>=15,<16",

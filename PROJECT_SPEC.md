@@ -425,11 +425,16 @@ request a natural final utterance and close only after Twilio acknowledges its
 playback. Do not add an approval workflow, UI, recording, summaries, or arbitrary
 external-action tools.
 
-### Phase 6 — provider media bridge
+### Phase 6 — durable call history
 
-Extend the Phase 3 bridge only where later requirements need bounded buffering,
-more complete interruption semantics, or codec conversion. Preserve the tested
-provider boundaries and direct forwarding while formats remain compatible.
+Persist calls, canonical final remote/assistant transcripts, captured facts,
+and meaningful lifecycle events using async SQLAlchemy 2.x, aiosqlite, and
+SQLite. Store timestamps in UTC and reserve `APP_TIMEZONE` for later display.
+Completion events are authoritative; transcript deltas remain runtime-only.
+Conversation-item sequence, rather than completion arrival order, determines
+transcript order. Historical database state is authoritative, while live
+WebSockets, playback tracking, and relay tasks remain process-local. Do not add
+recording, summaries, approval, handoff, or a frontend.
 
 ### Phase 7 — controlled end-to-end operation
 

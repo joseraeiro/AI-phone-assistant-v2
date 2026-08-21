@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+from concurrent.futures import CancelledError
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +178,7 @@ def test_websocket_handles_client_disconnect_cleanly(
     caplog.set_level(logging.INFO)
     with (
         TestClient(app) as client,
+        suppress(CancelledError),
         client.websocket_connect("/twilio/media") as websocket,
     ):
         websocket.send_json(fixture_message("connected"))

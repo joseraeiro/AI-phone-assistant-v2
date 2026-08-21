@@ -119,6 +119,9 @@ class OpenAIRealtimeSession:
                     "audio": {
                         "input": {
                             "format": {"type": "audio/pcmu"},
+                            "transcription": {
+                                "model": self.settings.openai_transcription_model
+                            },
                             "turn_detection": self._turn_detection(),
                         },
                         "output": {

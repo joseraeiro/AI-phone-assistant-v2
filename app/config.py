@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     app_base_url: str | None = None
     app_host: str = "0.0.0.0"
     app_port: int = Field(default=8000, ge=1, le=65535)
+    app_timezone: str = "Europe/Lisbon"
+    database_url: str = "sqlite+aiosqlite:///./ai_phone_assistant.db"
 
     twilio_account_sid: str | None = None
     twilio_auth_token: SecretStr | None = None
@@ -31,6 +33,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_realtime_model: str = "gpt-realtime-2.1"
     openai_realtime_voice: str = "marin"
+    openai_transcription_model: str = "gpt-live-transcribe"
     openai_realtime_vad_type: Literal["semantic_vad", "server_vad"] = "semantic_vad"
     openai_realtime_vad_eagerness: Literal["low", "medium", "high", "auto"] = "auto"
     openai_realtime_vad_threshold: float = Field(default=0.5, ge=0, le=1)

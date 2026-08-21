@@ -9,6 +9,7 @@ from fastapi.websockets import WebSocketDisconnect
 
 from app.agent.tools import ToolDispatcher, ToolDispatchError
 from app.services.audio_codec import AudioCodec, InvalidAudioPayload
+from app.services.call_history import CallHistory
 from app.services.media_stream import MalformedMediaEvent, MediaStreamSession
 from app.services.openai_realtime import (
     MalformedRealtimeEvent,
@@ -43,6 +44,7 @@ class RealtimeAudioBridge:
         media_session: MediaStreamSession,
         codec: AudioCodec,
         tool_dispatcher: ToolDispatcher | None = None,
+        history: CallHistory | None = None,
     ) -> None:
         if media_session.stream_sid is None:
             raise ValueError("Twilio start event must be processed before bridging")
@@ -52,14 +54,18 @@ class RealtimeAudioBridge:
         self.codec = codec
         self.playback = AssistantPlaybackTracker()
         self.tool_dispatcher = tool_dispatcher
+        self.history = history
         self._finishing = False
         self._final_response_done = False
+        self._item_sequences: dict[str, int] = {}
+        self._next_transcript_sequence = 1
 
     async def run(self) -> None:
         """Run both relay directions until either side stops or disconnects."""
 
         try:
             await self.realtime.connect()
+            await self._event("OPENAI_CONNECTED", dedupe_key="openai-connected")
             await self.realtime.configure()
             try:
                 async with asyncio.TaskGroup() as tasks:
@@ -71,6 +77,7 @@ class RealtimeAudioBridge:
             logger.info("REALTIME_BRIDGE_OPENAI_DISCONNECTED")
         finally:
             await self.realtime.close()
+            await self._event("OPENAI_DISCONNECTED", dedupe_key="openai-disconnected")
             logger.info(
                 "REALTIME_BRIDGE_STOPPED call_sid=%s stream_sid=%s",
                 self.media_session.call_sid,
@@ -106,6 +113,12 @@ class RealtimeAudioBridge:
                     if isinstance(name, str):
                         self.playback.acknowledge_mark(name)
                         self._finish_if_ready()
+                elif message.get("event") == "stop":
+                    await self._event(
+                        "STREAM_STOPPED",
+                        payload={"stream_sid": self.media_session.stream_sid},
+                        dedupe_key=f"stream-stopped:{self.media_session.stream_sid}",
+                    )
                 if not should_continue:
                     raise _BridgeFinished
         except WebSocketDisconnect as exc:
@@ -152,6 +165,7 @@ class RealtimeAudioBridge:
                         "OPENAI_REALTIME_MALFORMED reason=audio_delta_identifiers"
                     )
                     continue
+                self._sequence_for_item(item_id)
                 try:
                     encoded_audio = self.codec.openai_to_twilio(delta)
                     duration_ms = self.codec.duration_ms(encoded_audio)
@@ -185,7 +199,16 @@ class RealtimeAudioBridge:
                     }
                 )
             elif event_type == "input_audio_buffer.speech_started":
+                await self._event("REMOTE_SPEECH_STARTED")
                 await self._interrupt_assistant()
+            elif event_type == "input_audio_buffer.committed":
+                item_id = event.get("item_id")
+                if isinstance(item_id, str):
+                    self._sequence_for_item(item_id)
+            elif event_type == "conversation.item.input_audio_transcription.completed":
+                await self._persist_transcript(event, speaker="remote")
+            elif event_type == "response.output_audio_transcript.done":
+                await self._persist_transcript(event, speaker="agent")
             elif event_type == "response.output_audio.done":
                 response_id = event.get("response_id")
                 if isinstance(response_id, str):
@@ -208,6 +231,13 @@ class RealtimeAudioBridge:
                 elif await self._handle_tool_calls(event):
                     pass
                 else:
+                    response_id = self._response_id(event)
+                    await self._event(
+                        "AGENT_RESPONSE_COMPLETED",
+                        dedupe_key=(
+                            f"response-completed:{response_id}" if response_id else None
+                        ),
+                    )
                     logger.debug("OPENAI_REALTIME_EVENT type=response.done")
                     if self._finishing:
                         self._final_response_done = True
@@ -217,9 +247,16 @@ class RealtimeAudioBridge:
             elif event_type in {
                 "session.created",
                 "session.updated",
-                "response.created",
             }:
                 logger.debug("OPENAI_REALTIME_EVENT type=%s", event_type)
+            elif event_type == "response.created":
+                response_id = self._response_id(event)
+                await self._event(
+                    "AGENT_RESPONSE_STARTED",
+                    dedupe_key=(
+                        f"response-started:{response_id}" if response_id else None
+                    ),
+                )
             else:
                 logger.debug("OPENAI_REALTIME_UNKNOWN_EVENT type=%s", event_type)
 
@@ -231,6 +268,10 @@ class RealtimeAudioBridge:
             "ASSISTANT_INTERRUPTED item_id=%s audio_end_ms=%d",
             point.item_id,
             point.audio_end_ms,
+        )
+        await self._event(
+            "AGENT_RESPONSE_INTERRUPTED",
+            payload={"item_id": point.item_id, "audio_end_ms": point.audio_end_ms},
         )
         try:
             await self.realtime.truncate_conversation_item(
@@ -275,6 +316,11 @@ class RealtimeAudioBridge:
             if not all(isinstance(value, str) for value in (name, call_id, arguments)):
                 logger.warning("OPENAI_REALTIME_MALFORMED reason=function_call")
                 continue
+            await self._event(
+                "TOOL_CALLED",
+                payload={"name": name},
+                dedupe_key=f"tool-called:{call_id}",
+            )
             if self.tool_dispatcher is None:
                 result = {"ok": False, "error": "Internal tools are unavailable"}
             else:
@@ -284,6 +330,7 @@ class RealtimeAudioBridge:
                 except ToolDispatchError as exc:
                     logger.warning("AGENT_TOOL_REJECTED name=%s", name)
                     result = {"ok": False, "error": str(exc)}
+            await self._persist_tool_result(name, call_id, result)
             await self.realtime.submit_tool_output(call_id=call_id, result=result)
 
         finishing = bool(
@@ -294,6 +341,79 @@ class RealtimeAudioBridge:
             self._final_response_done = False
         await self.realtime.request_response(finishing=finishing)
         return True
+
+    async def _persist_tool_result(
+        self, name: str, call_id: str, result: dict[str, Any]
+    ) -> None:
+        await self._event(
+            "TOOL_COMPLETED",
+            payload={"name": name, "ok": result.get("ok", True)},
+            dedupe_key=f"tool-completed:{call_id}",
+        )
+        if self.history is None:
+            return
+        if name == "save_fact" and result.get("saved"):
+            fact = result.get("fact")
+            if isinstance(fact, dict):
+                await self.history.fact(
+                    category=str(fact.get("category", "")),
+                    fact=str(fact.get("fact", "")),
+                    confidence=str(fact.get("confidence", "")),
+                )
+                await self._event("FACT_CAPTURED", dedupe_key=f"fact:{call_id}")
+        elif name == "set_objective_status" and result.get("updated"):
+            await self.history.update_call(
+                objective_status=str(result["status"]),
+                objective_status_reason=str(result["reason"]),
+            )
+            await self._event(
+                "OBJECTIVE_STATUS_CHANGED",
+                payload={"status": result["status"], "reason": result["reason"]},
+                dedupe_key=f"objective-status:{call_id}",
+            )
+        elif name == "finish_call" and result.get("finish_scheduled"):
+            await self._event(
+                "CALL_END_REQUESTED",
+                payload={"reason": result["reason"]},
+                dedupe_key=f"call-end:{call_id}",
+            )
+
+    async def _persist_transcript(
+        self, event: dict[str, Any], *, speaker: str
+    ) -> None:
+        if self.history is None:
+            return
+        item_id = event.get("item_id")
+        transcript = event.get("transcript")
+        if not isinstance(item_id, str) or not isinstance(transcript, str):
+            logger.warning("OPENAI_REALTIME_MALFORMED reason=transcript_completed")
+            return
+        await self.history.transcript(
+            speaker=speaker,
+            text=transcript,
+            source="openai_realtime",
+            sequence=self._sequence_for_item(item_id),
+        )
+
+    def _sequence_for_item(self, item_id: str) -> int:
+        sequence = self._item_sequences.get(item_id)
+        if sequence is None:
+            sequence = self._next_transcript_sequence
+            self._next_transcript_sequence += 1
+            self._item_sequences[item_id] = sequence
+        return sequence
+
+    async def _event(
+        self,
+        event_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        dedupe_key: str | None = None,
+    ) -> None:
+        if self.history is not None:
+            await self.history.event(
+                event_type, payload=payload, dedupe_key=dedupe_key
+            )
 
     def _finish_if_ready(self) -> None:
         if (

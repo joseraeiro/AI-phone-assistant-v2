@@ -64,3 +64,4 @@ class CallRuntime:
         self.objective_status_reason = "Not assessed yet"
         self.finish_requested = False
         self.finish_reason: str | None = None
+        self.persistence_enabled = False

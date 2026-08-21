@@ -9,13 +9,14 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 5**. It creates an outbound Twilio call,
+The repository is currently at **Phase 6**. It creates an outbound Twilio call,
 connects the answered call to a bidirectional Media Stream, and bridges telephone
 audio to an interruptible, goal-directed OpenAI Realtime agent. Each call carries
 its own objective, context, preferences, constraints, language, and explicit
 authority grants. The agent remains non-binding by default and has only three
-internal state tools. The application does not record audio and does not yet
-implement durable persistence, summaries, approval, handoff, or a frontend.
+internal tools. Calls, canonical final transcripts, captured facts, and
+meaningful lifecycle events are durable in SQLite. The application does not
+record audio and does not implement summaries, approval, handoff, or a frontend.
 
 ## Requirements
 
@@ -217,9 +218,8 @@ The only model-visible internal tools are:
   for Twilio's final playback mark before ending the stream.
 
 Tool names are dispatched through a fixed allow-list and arguments are validated
-with Pydantic. Phase 5 state is intentionally process-local: it survives for the
-life of this application process but is lost on restart and is not shared across
-workers. Durable SQLite persistence and result APIs are later work.
+with Pydantic. Their historical results are persisted; live tool/playback and
+WebSocket state remains deliberately process-local.
 
 The function-call event flow follows the current Realtime protocol: tools are
 declared in `session.update`, completed calls are read from `response.done`,
@@ -227,3 +227,20 @@ results are returned as `function_call_output` conversation items, and a new
 `response.create` continues the conversation.
 
 - [OpenAI Realtime function calling](https://developers.openai.com/api/docs/guides/realtime-conversations#function-calling)
+
+## Durable call history
+
+`DATABASE_URL` defaults to `sqlite+aiosqlite:///./ai_phone_assistant.db`. The
+application creates the SQLAlchemy schema at startup and stores call
+configuration/state, final remote and assistant transcripts, captured facts,
+and significant provider/agent events. All stored timestamps are UTC;
+`APP_TIMEZONE=Europe/Lisbon` reserves the display timezone for a later UI.
+
+Remote transcript deltas are not stored. Canonical remote entries come from
+`conversation.item.input_audio_transcription.completed`; canonical assistant
+entries come from `response.output_audio_transcript.done`. Item sequencing is
+assigned when conversation items are observed, so completion events arriving
+out of order do not reorder the conversation. Audio packets and live WebSocket
+objects are never written to SQLite.
+
+- [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)

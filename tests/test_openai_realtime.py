@@ -69,6 +69,7 @@ def test_connect_and_configure_current_pcmu_session() -> None:
         assert update["session"]["audio"] == {
             "input": {
                 "format": {"type": "audio/pcmu"},
+                "transcription": {"model": "gpt-live-transcribe"},
                 "turn_detection": {
                     "type": "semantic_vad",
                     "create_response": True,

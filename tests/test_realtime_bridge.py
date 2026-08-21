@@ -24,6 +24,14 @@ STREAM_SID = "MZ11111111111111111111111111111111"
 AUDIO = base64.b64encode(bytes(160)).decode()
 
 
+class RecordingHistory:
+    def __init__(self) -> None:
+        self.transcripts: list[dict[str, Any]] = []
+
+    async def transcript(self, **values: Any) -> None:
+        self.transcripts.append(values)
+
+
 def media_session() -> MediaStreamSession:
     session = MediaStreamSession()
     session.handle_event(
@@ -42,6 +50,38 @@ def media_session() -> MediaStreamSession:
         }
     )
     return session
+
+
+def test_only_final_transcripts_are_persisted_in_item_order() -> None:
+    async def scenario() -> None:
+        history = RecordingHistory()
+        bridge = RealtimeAudioBridge(
+            FakeTwilioSocket(),
+            FakeRealtimeSession(),  # type: ignore[arg-type]
+            media_session(),
+            PcmuPassthroughCodec(),
+            history=history,  # type: ignore[arg-type]
+        )
+        bridge._sequence_for_item("remote-item")
+        bridge._sequence_for_item("agent-item")
+        # Delta events are intentionally never handed to persistence.
+        await bridge._persist_transcript(
+            {
+                "item_id": "agent-item",
+                "transcript": "Fechamos às dezoito.",
+            },
+            speaker="agent",
+        )
+        await bridge._persist_transcript(
+            {"item_id": "remote-item", "transcript": "Boa tarde."},
+            speaker="remote",
+        )
+        assert [(row["speaker"], row["sequence"]) for row in history.transcripts] == [
+            ("agent", 2),
+            ("remote", 1),
+        ]
+
+    asyncio.run(scenario())
 
 
 class FakeTwilioSocket:

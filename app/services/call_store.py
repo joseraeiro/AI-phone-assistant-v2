@@ -11,7 +11,7 @@ class CallNotFoundError(LookupError):
 
 
 class CallStore:
-    """Thread-safe in-memory runtime store; persistence is deliberately deferred."""
+    """Thread-safe live state; durable historical state belongs in SQLite."""
 
     def __init__(self) -> None:
         self._calls: dict[UUID, CallRuntime] = {}
