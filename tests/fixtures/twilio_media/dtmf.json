@@ -1,0 +1,9 @@
+{
+  "event": "dtmf",
+  "sequenceNumber": "3",
+  "streamSid": "MZ11111111111111111111111111111111",
+  "dtmf": {
+    "track": "inbound_track",
+    "digit": "1"
+  }
+}

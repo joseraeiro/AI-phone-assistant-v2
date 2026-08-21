@@ -1,0 +1,11 @@
+{
+  "event": "media",
+  "sequenceNumber": "2",
+  "media": {
+    "track": "inbound",
+    "chunk": "1",
+    "timestamp": "0",
+    "payload": "AAECAw=="
+  },
+  "streamSid": "MZ11111111111111111111111111111111"
+}

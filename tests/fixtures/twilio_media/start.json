@@ -1,0 +1,19 @@
+{
+  "event": "start",
+  "sequenceNumber": "1",
+  "start": {
+    "accountSid": "AC11111111111111111111111111111111",
+    "streamSid": "MZ11111111111111111111111111111111",
+    "callSid": "CA11111111111111111111111111111111",
+    "tracks": ["inbound"],
+    "customParameters": {
+      "internal_call_id": "12345678-1234-5678-1234-567812345678"
+    },
+    "mediaFormat": {
+      "encoding": "audio/x-mulaw",
+      "sampleRate": 8000,
+      "channels": 1
+    }
+  },
+  "streamSid": "MZ11111111111111111111111111111111"
+}
