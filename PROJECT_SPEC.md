@@ -385,10 +385,13 @@ quality tooling, and tests. Initiate a single outbound Twilio call, return fixed
 test-message TwiML, validate provider signatures, and log lifecycle callbacks.
 Do not implement persistence, OpenAI, Media Streams, or a user interface.
 
-### Phase 2 — domain and persistence
+### Phase 2 — Twilio bidirectional Media Stream intake
 
-Implement validated non-binding call configuration, state transitions, SQLite
-persistence, and repository tests. No live provider calls.
+Replace fixed-message TwiML with `<Connect><Stream>` and correlate it with an
+internal call identifier passed as a custom parameter. Accept Twilio's Media
+Stream WebSocket events, verify the fixed telephony media format, and count
+incoming packets and decoded bytes without forwarding, retaining, or logging
+audio. Do not implement OpenAI, transcription, recording, or persistence.
 
 ### Phase 3 — local owner call-management surface
 
@@ -407,10 +410,11 @@ After reviewing current official docs, implement a separately testable OpenAI
 Realtime client, event models, session instructions, and configuration using
 fake sockets. No production media relay yet.
 
-### Phase 6 — bidirectional media bridge
+### Phase 6 — provider media bridge
 
-Verify audio compatibility, implement pass-through or isolated conversion,
-bounded relays, interruption, cancellation, and end-to-end mocked stream tests.
+Verify compatibility with the other audio provider, implement pass-through or
+isolated conversion, bounded relays, interruption, cancellation, and end-to-end
+mocked stream tests. Preserve the Phase 2 Twilio event boundary.
 
 ### Phase 7 — controlled end-to-end operation
 

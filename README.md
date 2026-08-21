@@ -9,10 +9,12 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 1**. It can create one outbound Twilio
-call, speak a fixed Portuguese test message, and log Twilio lifecycle callbacks.
-It does not yet implement OpenAI Realtime, Media Streams, audio processing,
-transcription, recording, summarization, tools, persistence, or a frontend.
+The repository is currently at **Phase 2**. It can create one outbound Twilio
+call, connect the answered call to a bidirectional Twilio Media Stream, validate
+the documented telephony format, count received audio packets and bytes, and log
+Twilio call and stream lifecycles. It does not yet forward or retain audio and
+does not implement OpenAI Realtime, transcription, recording, summarization,
+tools, persistence, or a frontend.
 
 ## Requirements
 
@@ -82,10 +84,23 @@ curl -X POST http://localhost:8000/calls \
   -d '{"destination_number":"+351..."}'
 ```
 
-Twilio calls the destination, requests `POST /twilio/voice` after answer, plays
-“Olá. Esta é uma chamada de teste do assistente virtual.”, and ends the call.
-Lifecycle callbacks are sent to `POST /twilio/call-status` and appear in the
-server logs with the call SID and status.
+Twilio calls the destination and requests `POST /twilio/voice` after answer.
+The returned TwiML connects the call to `WSS /twilio/media`. Lifecycle callbacks
+are sent to `POST /twilio/call-status`; Media Stream lifecycle and periodic
+packet/byte counters appear in the server logs.
+
+Speak into the answered telephone for several seconds and then hang up. A
+successful stream produces logs with these markers:
+
+```text
+MEDIA_STREAM_CONNECTED
+MEDIA_STREAM_STARTED call_sid=CA... stream_sid=MZ... internal_call_id=...
+MEDIA_RECEIVING call_sid=CA... stream_sid=MZ... packets=... bytes=... approx_seconds=...
+MEDIA_STREAM_STOPPED call_sid=CA... stream_sid=MZ... packets=... bytes=... approx_seconds=...
+```
+
+The application never logs the base64 payload and currently discards decoded
+audio immediately after measuring its size.
 
 To validate locally without contacting Twilio, set `DRY_RUN=true`, restart the
 server, and submit the same request. The response contains `"simulated": true`.
@@ -96,3 +111,19 @@ server, and submit the same request. The response contains `"simulated": true`.
 uv run ruff check .
 uv run pytest
 ```
+
+## Twilio Media Stream protocol boundary
+
+The implementation follows Twilio's current Media Streams message shapes for
+`connected`, `start`, `media`, `dtmf`, `mark`, and `stop`. It expects the
+documented fixed stream format: `audio/x-mulaw`, 8,000 Hz, mono. The start event
+supplies the Twilio Call SID, Stream SID, media format, and custom parameters.
+The media payload is base64-encoded audio; this phase decodes only to count
+bytes and never stores or forwards it. Unknown future event names are ignored
+safely, while malformed known events are logged without including audio data.
+
+Useful official references for integration review:
+
+- [Media Streams WebSocket messages](https://www.twilio.com/docs/voice/media-streams/websocket-messages)
+- [`<Stream>` TwiML](https://www.twilio.com/docs/voice/twiml/stream)
+- [Media Streams overview](https://www.twilio.com/docs/voice/media-streams)

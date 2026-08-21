@@ -2,7 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, WebSocket, status
 from twilio.request_validator import RequestValidator
 
 from app.config import Settings
@@ -45,3 +45,31 @@ def _public_request_url(request: Request, settings: Settings) -> str:
             url = f"{url}?{request.url.query}"
         return url
     return str(request.url)
+
+
+def validate_twilio_websocket(websocket: WebSocket, settings: Settings) -> bool:
+    """Validate Twilio's signature on the initial Media Stream upgrade."""
+
+    if not settings.twilio_validate_signatures:
+        return True
+    if settings.twilio_auth_token is None:
+        return False
+
+    signature = websocket.headers.get("X-Twilio-Signature", "")
+    public_url = _public_websocket_url(websocket, settings)
+    validator = RequestValidator(settings.twilio_auth_token.get_secret_value())
+    return validator.validate(public_url, {}, signature)
+
+
+def _public_websocket_url(websocket: WebSocket, settings: Settings) -> str:
+    if settings.app_base_url:
+        base_url = settings.app_base_url.rstrip("/")
+        if base_url.startswith("https://"):
+            base_url = f"wss://{base_url.removeprefix('https://')}"
+        elif base_url.startswith("http://"):
+            base_url = f"ws://{base_url.removeprefix('http://')}"
+        url = f"{base_url}{websocket.url.path}"
+        if websocket.url.query:
+            url = f"{url}?{websocket.url.query}"
+        return url
+    return str(websocket.url)

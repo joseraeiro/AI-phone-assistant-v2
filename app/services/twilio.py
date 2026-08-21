@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import UUID, uuid4
 
 from twilio.rest import Client
 
@@ -26,6 +27,7 @@ class CreatedCall:
 
     sid: str
     status: str
+    internal_call_id: UUID
 
 
 class ConfigurationError(RuntimeError):
@@ -42,8 +44,13 @@ class OutboundCallService:
     def create(self, destination_number: str) -> CreatedCall:
         """Create one call, or return a deterministic dry-run result."""
 
+        internal_call_id = uuid4()
         if self.settings.dry_run:
-            return CreatedCall(sid="DRY_RUN", status="simulated")
+            return CreatedCall(
+                sid="DRY_RUN",
+                status="simulated",
+                internal_call_id=internal_call_id,
+            )
 
         base_url = self._validated_base_url()
         account_sid = self.settings.twilio_account_sid
@@ -58,13 +65,17 @@ class OutboundCallService:
         call = client.calls.create(
             to=destination_number,
             from_=from_number,
-            url=f"{base_url}/twilio/voice",
+            url=f"{base_url}/twilio/voice?call_id={internal_call_id}",
             method="POST",
             status_callback=f"{base_url}/twilio/call-status",
             status_callback_method="POST",
             status_callback_event=["initiated", "ringing", "answered", "completed"],
         )
-        return CreatedCall(sid=str(call.sid), status=str(call.status or "queued"))
+        return CreatedCall(
+            sid=str(call.sid),
+            status=str(call.status or "queued"),
+            internal_call_id=internal_call_id,
+        )
 
     def _validated_base_url(self) -> str:
         base_url = (self.settings.app_base_url or "").rstrip("/")

@@ -12,23 +12,27 @@ from app.main import app
 @pytest.fixture
 def unsigned_client() -> TestClient:
     app.dependency_overrides[get_settings] = lambda: Settings(
-        twilio_validate_signatures=False
+        app_base_url="https://public.example.test", twilio_validate_signatures=False
     )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 
 
-def test_voice_webhook_returns_fixed_portuguese_twiml(
+def test_voice_webhook_returns_bidirectional_stream_twiml(
     unsigned_client: TestClient,
 ) -> None:
-    response = unsigned_client.post("/twilio/voice")
+    response = unsigned_client.post(
+        "/twilio/voice?call_id=12345678-1234-5678-1234-567812345678"
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/xml")
-    assert '<Say language="pt-PT">' in response.text
-    assert "Olá. Esta é uma chamada de teste do assistente virtual." in response.text
-    assert "<Connect>" not in response.text
+    assert "<Connect>" in response.text
+    assert '<Stream url="wss://public.example.test/twilio/media">' in response.text
+    assert 'name="internal_call_id"' in response.text
+    assert 'value="12345678-1234-5678-1234-567812345678"' in response.text
+    assert "<Say" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -115,7 +119,9 @@ def test_signature_validation_fails_closed_without_auth_token() -> None:
         twilio_validate_signatures=True
     )
     with TestClient(app) as client:
-        response = client.post("/twilio/voice")
+        response = client.post(
+            "/twilio/voice?call_id=12345678-1234-5678-1234-567812345678"
+        )
     app.dependency_overrides.clear()
 
     assert response.status_code == 503

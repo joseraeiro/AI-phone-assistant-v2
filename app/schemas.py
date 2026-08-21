@@ -1,6 +1,7 @@
 """HTTP request and response schemas."""
 
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, StringConstraints
 
@@ -22,6 +23,7 @@ class CallCreated(BaseModel):
     call_sid: str
     status: str
     simulated: bool = False
+    internal_call_id: UUID
 
 
 class StatusReceived(BaseModel):

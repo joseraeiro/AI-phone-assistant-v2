@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,7 +43,11 @@ def test_rejects_non_e164_destination_numbers(client: TestClient, number: str) -
 
 def test_accepts_e164_destination_and_creates_call(client: TestClient) -> None:
     service = Mock(spec=OutboundCallService)
-    service.create.return_value = SimpleNamespace(sid="CA123", status="queued")
+    service.create.return_value = SimpleNamespace(
+        sid="CA123",
+        status="queued",
+        internal_call_id=UUID("12345678-1234-5678-1234-567812345678"),
+    )
     app.dependency_overrides[get_call_service] = lambda: service
 
     response = client.post("/calls", json={"destination_number": "+351211234567"})
@@ -52,11 +57,16 @@ def test_accepts_e164_destination_and_creates_call(client: TestClient) -> None:
         "call_sid": "CA123",
         "status": "queued",
         "simulated": False,
+        "internal_call_id": "12345678-1234-5678-1234-567812345678",
     }
     service.create.assert_called_once_with("+351211234567")
 
 
-def test_twilio_sdk_receives_expected_call_configuration() -> None:
+def test_twilio_sdk_receives_expected_call_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    internal_call_id = UUID("12345678-1234-5678-1234-567812345678")
+    monkeypatch.setattr("app.services.twilio.uuid4", lambda: internal_call_id)
     twilio_client = Mock()
     twilio_client.calls.create.return_value = SimpleNamespace(
         sid="CA456", status="queued"
@@ -75,7 +85,10 @@ def test_twilio_sdk_receives_expected_call_configuration() -> None:
     twilio_client.calls.create.assert_called_once_with(
         to="+351211234567",
         from_="+351210000000",
-        url="https://calls.example.test/twilio/voice",
+        url=(
+            "https://calls.example.test/twilio/voice"
+            "?call_id=12345678-1234-5678-1234-567812345678"
+        ),
         method="POST",
         status_callback="https://calls.example.test/twilio/call-status",
         status_callback_method="POST",
@@ -91,6 +104,7 @@ def test_dry_run_does_not_call_twilio() -> None:
 
     assert result.sid == "DRY_RUN"
     assert result.status == "simulated"
+    assert result.internal_call_id
     twilio_client.calls.create.assert_not_called()
 
 
@@ -102,11 +116,14 @@ def test_dry_run_endpoint_returns_simulated_result(client: TestClient) -> None:
     response = client.post("/calls", json={"destination_number": "+351211234567"})
 
     assert response.status_code == 201
-    assert response.json() == {
+    response_body = response.json()
+    assert response_body == {
         "call_sid": "DRY_RUN",
         "status": "simulated",
         "simulated": True,
+        "internal_call_id": response_body["internal_call_id"],
     }
+    assert UUID(response_body["internal_call_id"])
 
 
 def test_missing_destination_is_invalid(client: TestClient) -> None:

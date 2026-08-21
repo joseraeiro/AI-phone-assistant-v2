@@ -47,4 +47,9 @@ def create_call(
         call.status,
         simulated,
     )
-    return CallCreated(call_sid=call.sid, status=call.status, simulated=simulated)
+    return CallCreated(
+        call_sid=call.sid,
+        status=call.status,
+        simulated=simulated,
+        internal_call_id=call.internal_call_id,
+    )
