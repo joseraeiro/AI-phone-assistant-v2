@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}New Call · Telephone Agent{% endblock %}
+{% block content %}
+  <section class="page-heading"><div><p class="eyebrow">Outbound agent</p><h1>New Call</h1></div></section>
+  <form id="new-call-form" class="card form-card">
+    <div class="form-grid">
+      <label>Destination name<input name="destination_name" required maxlength="200" autocomplete="organization"></label>
+      <label>Telephone number<input name="destination_number" required placeholder="+351…" inputmode="tel"></label>
+    </div>
+    <label>Objective<textarea name="objective" required rows="3"></textarea></label>
+    <label>Context<textarea name="context" rows="3"></textarea></label>
+    <label>Preferences<textarea name="preferences" rows="2"></textarea></label>
+    <label>Constraints<textarea name="constraints" rows="2"></textarea></label>
+    <label>Language<input name="language" value="pt-PT" required></label>
+    <label>Recording policy<select name="recording_policy"><option value="ask" {% if default_recording_policy == 'ask' %}selected{% endif %}>Ask for consent</option><option value="off" {% if default_recording_policy == 'off' %}selected{% endif %}>Off</option><option value="always" {% if default_recording_policy == 'always' %}selected{% endif %}>Always</option></select></label>
+    <details>
+      <summary>Advanced settings</summary>
+      <div class="form-grid advanced">
+        <label>Realtime model<input name="realtime_model" placeholder="Use server default"></label>
+        <label>Voice<input name="voice" placeholder="Use server default"></label>
+      </div>
+    </details>
+    <p id="form-error" class="error" role="alert" hidden></p>
+    <div class="actions"><a class="button" href="/">Cancel</a><button class="button primary" type="submit">Create and start call</button></div>
+  </form>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/new-call.js') }}" defer></script>{% endblock %}

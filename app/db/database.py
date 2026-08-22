@@ -1,0 +1,70 @@
+"""Async engine and session lifecycle."""
+
+from functools import lru_cache
+
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.config import Settings
+from app.db.models import Base
+
+
+class Database:
+    """Own the async SQLAlchemy engine and short-lived session factory."""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.engine: AsyncEngine = create_async_engine(url)
+        self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def create_schema(self) -> None:
+        async with self.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+            columns = await connection.run_sync(
+                lambda sync_connection: {
+                    column["name"]
+                    for column in inspect(sync_connection).get_columns("calls")
+                }
+            )
+            additions = {
+                "openai_voice": "VARCHAR(100) NOT NULL DEFAULT 'marin'",
+                "summary_json": "TEXT",
+                "summary_text": "TEXT",
+                "summary_generated_at": "DATETIME",
+                "summary_error": "TEXT",
+                "summary_status": "VARCHAR(16) NOT NULL DEFAULT 'pending'",
+                "recording_policy": "VARCHAR(16) NOT NULL DEFAULT 'ask'",
+            }
+            for name, declaration in additions.items():
+                if name not in columns:
+                    await connection.execute(
+                        text(f"ALTER TABLE calls ADD COLUMN {name} {declaration}")
+                    )
+
+    async def dispose(self) -> None:
+        await self.engine.dispose()
+
+    async def check(self) -> None:
+        """Verify database connectivity without changing application data."""
+
+        async with self.engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+
+    def session(self) -> AsyncSession:
+        return self.sessions()
+
+
+@lru_cache
+def database_for_url(url: str) -> Database:
+    return Database(url)
+
+
+def get_database(settings: Settings) -> Database:
+    """Return the database configured for this process."""
+
+    return database_for_url(settings.database_url)

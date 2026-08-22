@@ -1,0 +1,32 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Runtime data
+*.db
+data/*.db
+*.sqlite
+*.sqlite3
+*.log
+recordings/
+data/recordings/
+audio/
+*.wav
+*.mp3
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
