@@ -3,7 +3,7 @@
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import urlencode
 
 from websockets.asyncio.client import connect as websocket_connect
@@ -72,6 +72,7 @@ class OpenAIRealtimeSession:
         self._first_utterance_instructions: str | None = None
         self._model = settings.openai_realtime_model
         self._voice = settings.openai_realtime_voice
+        self._recording_policy: Literal["off", "ask", "always"] = "off"
 
     def configure_agent(self, call: CallConfiguration) -> None:
         """Attach the centralized prompt and allowlisted tools before connecting."""
@@ -80,6 +81,7 @@ class OpenAIRealtimeSession:
         self._first_utterance_instructions = build_first_utterance_instructions(call)
         self._model = call.realtime_model or self.settings.openai_realtime_model
         self._voice = call.voice or self.settings.openai_realtime_voice
+        self._recording_policy = call.recording_policy
 
     async def connect(self) -> None:
         """Open an authenticated server-to-server Realtime WebSocket."""
@@ -118,7 +120,7 @@ class OpenAIRealtimeSession:
                     "model": self._model,
                     "instructions": self._agent_instructions,
                     "output_modalities": ["audio"],
-                    "tools": realtime_tool_definitions(),
+                    "tools": realtime_tool_definitions(self._recording_policy),
                     "tool_choice": "auto",
                     "audio": {
                         "input": {

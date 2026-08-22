@@ -62,6 +62,7 @@ class Call(Base):
     constraints: Mapped[str] = mapped_column(Text, default="")
     language: Mapped[str] = mapped_column(String(35), default="pt-PT")
     authorized_actions: Mapped[str] = mapped_column(Text, default="[]")
+    recording_policy: Mapped[str] = mapped_column(String(16), default="ask")
 
     status: Mapped[str] = mapped_column(String(32), default="created", index=True)
     objective_status: Mapped[str] = mapped_column(String(16), default="unknown")
@@ -92,6 +93,9 @@ class Call(Base):
         back_populates="call", cascade="all, delete-orphan"
     )
     facts: Mapped[list["CapturedFact"]] = relationship(
+        back_populates="call", cascade="all, delete-orphan"
+    )
+    recordings: Mapped[list["CallRecording"]] = relationship(
         back_populates="call", cascade="all, delete-orphan"
     )
 
@@ -156,3 +160,21 @@ class CapturedFact(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
     call: Mapped[Call] = relationship(back_populates="facts")
+
+
+class CallRecording(Base):
+    """Metadata for an optional Twilio call recording; never credentials."""
+
+    __tablename__ = "call_recordings"
+
+    recording_sid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    call_id: Mapped[str] = mapped_column(
+        ForeignKey("calls.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    duration: Mapped[int | None] = mapped_column(Integer)
+    channels: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    local_path: Mapped[str | None] = mapped_column(Text)
+
+    call: Mapped[Call] = relationship(back_populates="recordings")

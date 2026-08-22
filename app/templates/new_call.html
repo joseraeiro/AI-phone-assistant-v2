@@ -12,6 +12,7 @@
     <label>Preferences<textarea name="preferences" rows="2"></textarea></label>
     <label>Constraints<textarea name="constraints" rows="2"></textarea></label>
     <label>Language<input name="language" value="pt-PT" required></label>
+    <label>Recording policy<select name="recording_policy"><option value="ask" {% if default_recording_policy == 'ask' %}selected{% endif %}>Ask for consent</option><option value="off" {% if default_recording_policy == 'off' %}selected{% endif %}>Off</option><option value="always" {% if default_recording_policy == 'always' %}selected{% endif %}>Always</option></select></label>
     <details>
       <summary>Advanced settings</summary>
       <div class="form-grid advanced">

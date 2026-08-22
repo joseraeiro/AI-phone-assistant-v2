@@ -9,7 +9,7 @@ boundaries, phase plan, and unresolved decisions live in
 specification, inspect the existing code, run the existing tests, implement one
 phase only, and rerun the tests.
 
-The repository is currently at **Phase 8**. It creates an outbound Twilio call,
+The repository is currently at **Phase 9**. It creates an outbound Twilio call,
 connects the answered call to a bidirectional Media Stream, and bridges telephone
 audio to an interruptible, goal-directed OpenAI Realtime agent. Each call carries
 its own objective, context, preferences, constraints, language, and explicit
@@ -17,7 +17,8 @@ authority grants. The agent remains non-binding by default and has only three
 internal tools. Calls, canonical final transcripts, captured facts, and
 meaningful lifecycle events are durable in SQLite. The application does not
 record audio and does not implement approval or handoff. Completed calls receive
-a structured post-call report generated through the OpenAI Responses API.
+a structured post-call report generated through the OpenAI Responses API and
+supports optional, policy-controlled Twilio call recording.
 
 ## Requirements
 
@@ -289,3 +290,34 @@ Official implementation references:
 - [Responses API text generation](https://developers.openai.com/api/docs/guides/text)
 - [Structured model outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [Current model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+
+## Optional call recording
+
+`DEFAULT_RECORDING_POLICY` accepts `off`, `ask`, or `always` and defaults to
+`ask`. A call may override that default in the API or new-call form. Recording
+is independent of Realtime transcription and post-call reports.
+
+- `off`: no recording is started and the agent does not ask about recording.
+- `ask`: the agent asks naturally before pursuing the objective. Only a clear
+  agreement permits the allowlisted `start_recording_after_consent` tool. A
+  refusal or unclear answer starts no recording and the conversation continues.
+- `always`: the backend starts recording when Twilio establishes the Media
+  Stream; the agent does not request consent.
+
+The application makes no legal determination about recording. **The operator is
+responsible for selecting and operating a policy consistent with all applicable
+laws, consent requirements, and notices.** There is no owner approval workflow.
+
+The live-call Recording API requests both tracks in dual-channel format and
+uses an idempotent signed status callback. Metadata is durable in SQLite. The
+call page uses an internal WAV endpoint: the server authenticates to Twilio and
+never exposes credentials or a provider media URL to the browser. Dual-channel
+retrieval automatically falls back to mono when Twilio reports that dual media
+is unavailable.
+
+By default, media remains at Twilio and is proxied on demand. Set
+`DOWNLOAD_RECORDINGS_LOCALLY=true` to download completed WAV files into
+`RECORDINGS_DIR` (default `./data/recordings`). Local media files remain runtime
+data and must not be committed.
+
+- [Twilio Recordings resource and live-call API](https://www.twilio.com/docs/voice/api/recording)

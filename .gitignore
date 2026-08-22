@@ -20,6 +20,7 @@ build/
 *.sqlite3
 *.log
 recordings/
+data/recordings/
 audio/
 
 # Editors and operating systems

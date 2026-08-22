@@ -38,6 +38,7 @@ class Database:
                 "summary_generated_at": "DATETIME",
                 "summary_error": "TEXT",
                 "summary_status": "VARCHAR(16) NOT NULL DEFAULT 'pending'",
+                "recording_policy": "VARCHAR(16) NOT NULL DEFAULT 'ask'",
             }
             for name, declaration in additions.items():
                 if name not in columns:

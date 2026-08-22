@@ -9,6 +9,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "openai" },
     { name = "pydantic-settings" },
@@ -21,7 +22,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -30,6 +30,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21,<1" },
     { name = "fastapi", specifier = ">=0.116,<1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jinja2", specifier = ">=3.1,<4" },
     { name = "openai", specifier = ">=2.0,<3" },
     { name = "pydantic-settings", specifier = ">=2.10,<3" },
@@ -42,7 +43,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pytest", specifier = ">=8.4,<9" },
     { name = "ruff", specifier = ">=0.12,<1" },
 ]

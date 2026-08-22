@@ -77,6 +77,13 @@ def test_history_order_idempotency_and_restart_durability(tmp_path: Path) -> Non
             fact="Amanhã abre às 09:00",
             confidence="confirmed",
         )
+        await repository.upsert_recording(
+            call.internal_call_id,
+            "RE" + "9" * 32,
+            status="completed",
+            duration=42,
+            channels=2,
+        )
         await database.dispose()
 
     async def read_after_restart() -> None:
@@ -97,6 +104,12 @@ def test_history_order_idempotency_and_restart_durability(tmp_path: Path) -> Non
         ]
         assert len(await repository.events(row.id)) == 1
         assert (await repository.facts(row.id))[0].fact == "Amanhã abre às 09:00"
+        recording = await repository.recording(row.id)
+        assert recording is not None
+        assert recording.status == "completed"
+        assert recording.duration == 42
+        assert recording.channels == 2
+        assert recording.created_at.tzinfo is UTC
         await database.dispose()
 
     asyncio.run(write_history())

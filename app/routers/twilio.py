@@ -2,6 +2,7 @@
 
 import json
 import logging
+from asyncio import to_thread
 from typing import Annotated
 from uuid import UUID
 
@@ -43,6 +44,11 @@ from app.services.openai_realtime import (
 )
 from app.services.post_call_summary import PostCallSummaryService, get_summary_service
 from app.services.realtime_bridge import RealtimeAudioBridge
+from app.services.recording import (
+    RecordingCoordinator,
+    TwilioRecordingService,
+    get_recording_service,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio", tags=["twilio"])
@@ -60,6 +66,30 @@ CALL_STATUSES = frozenset(
         "canceled",
     }
 )
+RECORDING_STATUSES = frozenset({"in-progress", "completed", "absent"})
+
+
+async def _download_recording(
+    repository: CallRepository,
+    service: TwilioRecordingService,
+    call_id: str,
+    recording_sid: str,
+    channels: int,
+) -> None:
+    try:
+        path = await to_thread(service.download, recording_sid, channels=channels)
+    except Exception:
+        logger.exception(
+            "TWILIO_RECORDING_DOWNLOAD_FAILED recording_sid=%s", recording_sid
+        )
+        return
+    await repository.upsert_recording(
+        call_id,
+        recording_sid,
+        status="completed",
+        channels=channels,
+        local_path=str(path),
+    )
 
 
 async def validate_twilio_request(
@@ -108,6 +138,9 @@ async def media_stream(
     realtime: Annotated[OpenAIRealtimeSession, Depends(get_realtime_session)],
     store: Annotated[CallStore, Depends(get_call_store)],
     repository: Annotated[CallRepository, Depends(get_call_repository)],
+    recording_service: Annotated[
+        TwilioRecordingService, Depends(get_recording_service)
+    ],
 ) -> None:
     """Bridge one authenticated Twilio media connection to OpenAI Realtime."""
 
@@ -161,6 +194,21 @@ async def media_stream(
                         payload={"stream_sid": session.stream_sid},
                         dedupe_key=f"stream-started:{session.stream_sid}",
                     )
+                recording = (
+                    RecordingCoordinator(
+                        internal_call_id,
+                        session.call_sid or "",
+                        repository,
+                        recording_service,
+                    )
+                    if history is not None and session.call_sid
+                    else None
+                )
+                if (
+                    recording is not None
+                    and runtime.configuration.recording_policy == "always"
+                ):
+                    await recording.start(consent=False)
                 bridge = RealtimeAudioBridge(
                     twilio=websocket,
                     realtime=realtime,
@@ -168,6 +216,7 @@ async def media_stream(
                     codec=PcmuPassthroughCodec(),
                     tool_dispatcher=ToolDispatcher(runtime),
                     history=history,
+                    recording=recording,
                 )
                 try:
                     await bridge.run()
@@ -250,3 +299,62 @@ async def call_status(
         if inserted and call_status == "completed":
             background_tasks.add_task(summary_service.generate, call.id)
     return StatusReceived(call_sid=call_sid, status=call_status)
+
+
+@router.post(
+    "/recording-status",
+    dependencies=[Depends(validate_twilio_request)],
+)
+async def recording_status(
+    background_tasks: BackgroundTasks,
+    recording_sid: Annotated[
+        str, Form(alias="RecordingSid", pattern=r"^RE[A-Za-z0-9]{32}$")
+    ],
+    call_sid: Annotated[
+        str, Form(alias="CallSid", pattern=r"^CA[A-Za-z0-9]{32}$")
+    ],
+    status: Annotated[str, Form(alias="RecordingStatus", max_length=24)],
+    repository: Annotated[CallRepository, Depends(get_call_repository)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    service: Annotated[
+        TwilioRecordingService, Depends(get_recording_service)
+    ],
+    duration: Annotated[int | None, Form(alias="RecordingDuration", ge=0)] = None,
+    channels: Annotated[int | None, Form(alias="RecordingChannels", ge=1, le=2)] = None,
+) -> dict[str, object]:
+    """Persist Twilio recording progress once per provider status."""
+
+    if status not in RECORDING_STATUSES:
+        logger.warning("TWILIO_RECORDING_UNKNOWN_STATUS status=%s", status)
+        return {"received": True, "status": status}
+    call = await repository.get_call_by_twilio_sid(call_sid)
+    if call is None:
+        logger.warning("TWILIO_RECORDING_UNKNOWN_CALL call_sid=%s", call_sid)
+        return {"received": True, "status": status}
+    await repository.upsert_recording(
+        call.id,
+        recording_sid,
+        status=status,
+        duration=duration,
+        channels=channels,
+    )
+    inserted = await repository.record_event(
+        call.id,
+        "RECORDING_STATUS_CHANGED",
+        payload={"recording_sid": recording_sid, "status": status},
+        dedupe_key=f"recording:{recording_sid}:{status}",
+    )
+    if (
+        inserted
+        and status == "completed"
+        and settings.download_recordings_locally
+    ):
+        background_tasks.add_task(
+            _download_recording,
+            repository,
+            service,
+            call.id,
+            recording_sid,
+            channels or 1,
+        )
+    return {"received": True, "status": status}

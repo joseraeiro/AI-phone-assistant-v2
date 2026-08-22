@@ -461,6 +461,21 @@ a separate error. Failures must not change completed call state or transcript
 and must be retryable. Render the report in the existing detail view. Do not add
 recording, another frontend framework, or new agent tools.
 
+### Phase 9 — optional Twilio call recording
+
+Add a per-call `off`, `ask`, or `always` recording policy, defaulting from
+`DEFAULT_RECORDING_POLICY=ask`. In ask mode, require a clear remote agreement
+before exposing and invoking the narrowly allowlisted
+`start_recording_after_consent` tool; refusal or ambiguity must not start
+recording or end the informational conversation. In always mode, start through
+Twilio's live-call Recordings API when the stream begins. Prefer both tracks and
+dual channels, persist idempotent callback metadata, and keep recording separate
+from transcription and summaries. Proxy authenticated WAV retrieval through the
+backend, optionally downloading completed media to a configured local runtime
+directory. Never expose provider credentials or authenticated URLs. Make no
+legal assumptions: the operator owns policy selection and legal compliance. Do
+not add an owner approval workflow.
+
 ### Later phases
 
 Potential work includes stronger owner authentication, deployment hardening,

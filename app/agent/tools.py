@@ -3,7 +3,7 @@
 import json
 from collections.abc import Callable
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -39,6 +39,12 @@ class FinishCallArguments(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class StartRecordingArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consent_confirmed: Literal[True]
+
+
 TOOL_ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "save_fact": SaveFactArguments,
     "set_objective_status": SetObjectiveStatusArguments,
@@ -46,8 +52,10 @@ TOOL_ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
-def realtime_tool_definitions() -> list[dict[str, Any]]:
-    """Return only the three Phase 5 function schemas exposed to the model."""
+def realtime_tool_definitions(
+    recording_policy: Literal["off", "ask", "always"] = "off",
+) -> list[dict[str, Any]]:
+    """Return base tools plus the consent tool only when policy permits it."""
 
     descriptions = {
         "save_fact": "Save one important fact stated or confirmed during the call.",
@@ -58,6 +66,12 @@ def realtime_tool_definitions() -> list[dict[str, Any]]:
             "Request a graceful call ending after a brief spoken thank-you and goodbye."
         ),
     }
+    models = dict(TOOL_ARGUMENT_MODELS)
+    if recording_policy == "ask":
+        models["start_recording_after_consent"] = StartRecordingArguments
+        descriptions["start_recording_after_consent"] = (
+            "Start Twilio recording only after the remote person clearly consents."
+        )
     return [
         {
             "type": "function",
@@ -65,7 +79,7 @@ def realtime_tool_definitions() -> list[dict[str, Any]]:
             "description": descriptions[name],
             "parameters": model.model_json_schema(),
         }
-        for name, model in TOOL_ARGUMENT_MODELS.items()
+        for name, model in models.items()
     ]
 
 
@@ -83,11 +97,17 @@ class ToolDispatcher:
             "set_objective_status": self._set_objective_status,
             "finish_call": self._finish_call,
         }
+        if runtime.configuration.recording_policy == "ask":
+            self._handlers["start_recording_after_consent"] = self._start_recording
 
     def dispatch(self, name: str, arguments: str) -> dict[str, Any]:
         """Validate JSON and invoke an allowlisted handler; never dynamic-dispatch."""
 
-        model = TOOL_ARGUMENT_MODELS.get(name)
+        model = (
+            StartRecordingArguments
+            if name == "start_recording_after_consent"
+            else TOOL_ARGUMENT_MODELS.get(name)
+        )
         handler = self._handlers.get(name)
         if model is None or handler is None:
             raise ToolDispatchError(f"Tool is not allowed: {name}")
@@ -126,6 +146,11 @@ class ToolDispatcher:
             "reason": validated.reason,
             "instruction": "Say a brief natural thank-you and goodbye now.",
         }
+
+    def _start_recording(self, arguments: BaseModel) -> dict[str, Any]:
+        StartRecordingArguments.model_validate(arguments)
+        self.runtime.recording_requested = True
+        return {"recording_requested": True, "consent": "confirmed"}
 
 
 def serialize_tool_result(result: dict[str, Any]) -> str:

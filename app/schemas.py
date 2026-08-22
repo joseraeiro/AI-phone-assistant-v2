@@ -38,6 +38,7 @@ class CallCreate(BaseModel):
         str | None,
         StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
     ] = None
+    recording_policy: Literal["off", "ask", "always"] | None = None
 
 
 class CallCreated(BaseModel):

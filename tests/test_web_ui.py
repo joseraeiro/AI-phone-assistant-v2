@@ -68,6 +68,7 @@ def test_dashboard_new_call_and_detail_templates(web_client: TestClient) -> None
         "preferences",
         "constraints",
         "language",
+        "recording_policy",
         "realtime_model",
         "voice",
     ):

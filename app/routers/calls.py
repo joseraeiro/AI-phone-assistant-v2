@@ -40,9 +40,13 @@ async def create_call(
     """Validate and initiate a single outbound telephone call."""
 
     internal_call_id = uuid4()
+    call_data = request.model_dump()
+    call_data["recording_policy"] = (
+        request.recording_policy or settings.default_recording_policy
+    )
     configuration = CallConfiguration(
         internal_call_id=internal_call_id,
-        **request.model_dump(),
+        **call_data,
     )
     runtime = store.add(configuration)
     await repository.create_call(

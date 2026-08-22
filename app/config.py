@@ -1,6 +1,7 @@
 """Environment-backed application configuration."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -22,6 +23,9 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_timezone: str = "Europe/Lisbon"
     database_url: str = "sqlite+aiosqlite:///./ai_phone_assistant.db"
+    default_recording_policy: Literal["off", "ask", "always"] = "ask"
+    download_recordings_locally: bool = False
+    recordings_dir: Path = Path("./data/recordings")
 
     twilio_account_sid: str | None = None
     twilio_auth_token: SecretStr | None = None

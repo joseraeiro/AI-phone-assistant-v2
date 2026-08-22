@@ -45,6 +45,24 @@ function renderSummary(call) {
   }
 }
 
+function renderRecording(call) {
+  const container = document.querySelector("#recording");
+  if (!call.recording) return;
+  container.replaceChildren();
+  if (call.recording.status === "completed") {
+    const audio = document.createElement("audio");
+    const details = document.createElement("p");
+    audio.controls = true;
+    audio.preload = "none";
+    audio.src = call.recording.url;
+    details.className = "muted";
+    details.textContent = `${call.recording.duration ?? "—"}s · ${call.recording.channels ?? "—"} channel(s)`;
+    container.append(audio, details);
+  } else {
+    container.textContent = `Recording status: ${call.recording.status}`;
+  }
+}
+
 function replaceList(id, rows, render, emptyText) {
   const list = document.querySelector(id);
   list.replaceChildren();
@@ -68,6 +86,7 @@ source.addEventListener("call", (event) => {
   document.querySelector("#ended-at").textContent = call.ended_at || "—";
   document.querySelector("#end-call").hidden = ["completed", "failed", "busy", "no-answer", "canceled"].includes(call.status);
   renderSummary(call);
+  renderRecording(call);
   replaceList("#transcript", call.transcripts, (row) => {
     const li = document.createElement("li");
     const speaker = document.createElement("span");

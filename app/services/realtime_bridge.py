@@ -18,6 +18,7 @@ from app.services.openai_realtime import (
     RealtimeDisconnected,
 )
 from app.services.playback import AssistantPlaybackTracker
+from app.services.recording import RecordingCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class RealtimeAudioBridge:
         codec: AudioCodec,
         tool_dispatcher: ToolDispatcher | None = None,
         history: CallHistory | None = None,
+        recording: RecordingCoordinator | None = None,
     ) -> None:
         if media_session.stream_sid is None:
             raise ValueError("Twilio start event must be processed before bridging")
@@ -55,6 +57,7 @@ class RealtimeAudioBridge:
         self.playback = AssistantPlaybackTracker()
         self.tool_dispatcher = tool_dispatcher
         self.history = history
+        self.recording = recording
         self._finishing = False
         self._final_response_done = False
         self._item_sequences: dict[str, int] = {}
@@ -326,6 +329,14 @@ class RealtimeAudioBridge:
             else:
                 try:
                     result = self.tool_dispatcher.dispatch(name, arguments)
+                    if name == "start_recording_after_consent":
+                        if self.recording is None:
+                            result = {
+                                "started": False,
+                                "error": "Recording is unavailable",
+                            }
+                        else:
+                            result = await self.recording.start(consent=True)
                     logger.info("AGENT_TOOL_COMPLETED name=%s", name)
                 except ToolDispatchError as exc:
                     logger.warning("AGENT_TOOL_REJECTED name=%s", name)

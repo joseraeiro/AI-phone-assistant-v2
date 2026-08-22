@@ -4,19 +4,34 @@ import asyncio
 import json
 from asyncio import to_thread
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from twilio.base.exceptions import TwilioRestException
 
+from app.config import Settings, get_settings
 from app.db.dependencies import get_call_repository
 from app.db.models import Call, utc_now
 from app.db.repository import CallRepository
 from app.routers.calls import get_call_service
 from app.services.post_call_summary import PostCallSummaryService, get_summary_service
+from app.services.recording import (
+    RecordingConfigurationError,
+    RecordingUnavailable,
+    TwilioRecordingService,
+    get_recording_service,
+)
 from app.services.twilio import ConfigurationError, OutboundCallService
 
 router = APIRouter(tags=["web"])
@@ -62,8 +77,15 @@ async def dashboard(
 
 
 @router.get("/calls/new", response_class=HTMLResponse)
-async def new_call(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "new_call.html", {})
+async def new_call(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "new_call.html",
+        {"default_recording_policy": settings.default_recording_policy},
+    )
 
 
 @router.get("/calls/{call_id}", response_class=HTMLResponse)
@@ -87,6 +109,49 @@ async def call_detail(
             "status_label": _status_label(call.status),
             "is_terminal": call.status in TERMINAL_STATUSES,
             "summary": json.loads(call.summary_json) if call.summary_json else None,
+            "recording": await repository.recording(call_id),
+        },
+    )
+
+
+@router.get("/calls/{call_id}/recording.wav")
+async def recording_media(
+    call_id: UUID,
+    repository: Annotated[CallRepository, Depends(get_call_repository)],
+    service: Annotated[
+        TwilioRecordingService, Depends(get_recording_service)
+    ],
+) -> Response:
+    """Return local or Twilio-authenticated WAV without exposing credentials."""
+
+    recording = await repository.recording(call_id)
+    if recording is None or recording.status != "completed":
+        raise HTTPException(status_code=404, detail="Recording is unavailable")
+    if recording.local_path:
+        path = Path(recording.local_path).resolve()
+        root = service.settings.recordings_dir.resolve()
+        if path.is_relative_to(root) and path.is_file():
+            return FileResponse(path, media_type="audio/wav", filename=path.name)
+    try:
+        content = await to_thread(
+            service.fetch_wav,
+            recording.recording_sid,
+            channels=recording.channels or 1,
+        )
+    except RecordingUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RecordingConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail="Twilio media retrieval failed"
+        ) from exc
+    return Response(
+        content=content,
+        media_type="audio/wav",
+        headers={
+            "Content-Disposition": f'inline; filename="{recording.recording_sid}.wav"',
+            "Cache-Control": "private, no-store",
         },
     )
 
@@ -178,6 +243,7 @@ async def _snapshot(repository: CallRepository, call_id: UUID) -> dict[str, Any]
     transcripts = await repository.transcripts(call_id)
     facts = await repository.facts(call_id)
     events = await repository.events(call_id)
+    recording = await repository.recording(call_id)
     return {
         "status": call.status,
         "objective": call.objective,
@@ -205,6 +271,19 @@ async def _snapshot(repository: CallRepository, call_id: UUID) -> dict[str, Any]
             {"id": row.id, "type": row.event_type, "created_at": _iso(row.created_at)}
             for row in events
         ],
+        "recording": (
+            {
+                "sid": recording.recording_sid,
+                "status": recording.status,
+                "duration": recording.duration,
+                "channels": recording.channels,
+                "url": f"/calls/{call_id}/recording.wav"
+                if recording.status == "completed"
+                else None,
+            }
+            if recording
+            else None
+        ),
     }
 
 

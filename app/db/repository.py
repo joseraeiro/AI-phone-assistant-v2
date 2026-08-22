@@ -9,7 +9,14 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import Database
-from app.db.models import Call, CallEvent, CapturedFact, TranscriptEntry, utc_now
+from app.db.models import (
+    Call,
+    CallEvent,
+    CallRecording,
+    CapturedFact,
+    TranscriptEntry,
+    utc_now,
+)
 from app.domain.calls import CallConfiguration
 
 
@@ -32,6 +39,7 @@ class CallRepository:
             constraints=call.constraints,
             language=call.language,
             authorized_actions=json.dumps(sorted(call.authorized_actions)),
+            recording_policy=call.recording_policy,
             status="created",
             objective_status="unknown",
             openai_model=call.realtime_model or openai_model,
@@ -208,3 +216,51 @@ class CallRepository:
             )
             await session.commit()
             return bool(result.rowcount)
+
+    async def upsert_recording(
+        self,
+        call_id: UUID | str,
+        recording_sid: str,
+        *,
+        status: str,
+        duration: int | None = None,
+        channels: int | None = None,
+        local_path: str | None = None,
+    ) -> CallRecording:
+        """Create or update callback metadata without duplicate rows."""
+
+        async with self.database.session() as session:
+            row = await session.get(CallRecording, recording_sid)
+            if row is None:
+                row = CallRecording(
+                    recording_sid=recording_sid,
+                    call_id=str(call_id),
+                    status=status,
+                    duration=duration,
+                    channels=channels,
+                    local_path=local_path,
+                )
+                session.add(row)
+            else:
+                row.status = status
+                if duration is not None:
+                    row.duration = duration
+                if channels is not None:
+                    row.channels = channels
+                if local_path is not None:
+                    row.local_path = local_path
+            await session.commit()
+            return row
+
+    async def recording(self, call_id: UUID | str) -> CallRecording | None:
+        async with self.database.session() as session:
+            return await session.scalar(
+                select(CallRecording)
+                .where(CallRecording.call_id == str(call_id))
+                .order_by(CallRecording.created_at.desc())
+                .limit(1)
+            )
+
+    async def recording_by_sid(self, recording_sid: str) -> CallRecording | None:
+        async with self.database.session() as session:
+            return await session.get(CallRecording, recording_sid)

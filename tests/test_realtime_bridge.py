@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import WebSocketDisconnect
@@ -473,5 +474,51 @@ def test_unknown_model_tool_is_rejected_without_dynamic_execution() -> None:
             }
         ]
         assert realtime.response_requests == [False]
+
+    asyncio.run(scenario())
+
+
+def test_consent_tool_starts_recording_before_returning_tool_output() -> None:
+    async def scenario() -> None:
+        realtime = FakeRealtimeSession()
+        runtime = CallRuntime(call_configuration(recording_policy="ask"))
+        recording = AsyncMock()
+        recording.start.return_value = {
+            "started": True,
+            "recording_sid": "RE" + "7" * 32,
+        }
+        bridge = RealtimeAudioBridge(
+            FakeTwilioSocket(),
+            realtime,
+            media_session(),
+            PcmuPassthroughCodec(),
+            tool_dispatcher=ToolDispatcher(runtime),
+            recording=recording,
+        )
+        event = {
+            "response": {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "start_recording_after_consent",
+                        "call_id": "recording-tool-1",
+                        "arguments": '{"consent_confirmed":true}',
+                    }
+                ]
+            }
+        }
+
+        assert await bridge._handle_tool_calls(event) is True
+
+        recording.start.assert_awaited_once_with(consent=True)
+        assert realtime.tool_outputs == [
+            {
+                "call_id": "recording-tool-1",
+                "result": {
+                    "started": True,
+                    "recording_sid": "RE" + "7" * 32,
+                },
+            }
+        ]
 
     asyncio.run(scenario())

@@ -1,7 +1,7 @@
 """Validated call configuration and ephemeral objective state."""
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
@@ -46,6 +46,7 @@ class CallConfiguration(BaseModel):
     authorized_actions: frozenset[AuthorizedAction] = frozenset()
     realtime_model: str | None = Field(default=None, max_length=100)
     voice: str | None = Field(default=None, max_length=100)
+    recording_policy: Literal["off", "ask", "always"] = "ask"
 
 
 class SavedFact(BaseModel):
@@ -67,3 +68,4 @@ class CallRuntime:
         self.finish_requested = False
         self.finish_reason: str | None = None
         self.persistence_enabled = False
+        self.recording_requested = False
