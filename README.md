@@ -1,323 +1,256 @@
 # Personal AI Telephone Agent
 
-This repository will contain a Python personal AI telephone agent using Twilio
-Voice and the OpenAI Realtime API.
+## Overview
 
-Development is deliberately incremental. The target architecture, safety
-boundaries, phase plan, and unresolved decisions live in
-[`PROJECT_SPEC.md`](PROJECT_SPEC.md). Every implementation phase must read that
-specification, inspect the existing code, run the existing tests, implement one
-phase only, and rerun the tests.
+This Python application places outbound telephone calls through Twilio and conducts goal-directed voice conversations with the OpenAI Realtime API. For each call, the operator supplies a destination, objective, context, preferences, and constraints. The application provides a small server-rendered dashboard, durable call history, live transcript updates, captured facts, a structured post-call summary, and optional recording.
 
-The repository is currently at **Phase 9**. It creates an outbound Twilio call,
-connects the answered call to a bidirectional Media Stream, and bridges telephone
-audio to an interruptible, goal-directed OpenAI Realtime agent. Each call carries
-its own objective, context, preferences, constraints, language, and explicit
-authority grants. The agent remains non-binding by default and has only three
-internal tools. Calls, canonical final transcripts, captured facts, and
-meaningful lifecycle events are durable in SQLite. The application does not
-record audio and does not implement approval or handoff. Completed calls receive
-a structured post-call report generated through the OpenAI Responses API and
-supports optional, policy-controlled Twilio call recording.
+The agent may gather and clarify information autonomously, but it does not create commitments for the owner unless that call explicitly authorizes the action. It identifies itself as a virtual assistant acting for the owner and defaults to European Portuguese (`pt-PT`).
+
+## Architecture
+
+```text
+Browser ──HTTP/SSE──> FastAPI ───────────────> SQLite
+                         │                         ▲
+                         │ Twilio REST             │ call history
+                         v                         │
+                      Twilio Voice <──PSTN──> remote telephone
+                         │
+                 bidirectional Media Stream
+                         │ WSS (JSON + base64 PCMU)
+                         v
+                      FastAPI <────WebSocket────> OpenAI Realtime
+                         │
+                         ├──Responses API───────> post-call summary
+                         └──Twilio Recording API> optional recording
+```
+
+FastAPI owns both streaming connections and all credentials. Twilio places the PSTN call and carries bidirectional audio. OpenAI Realtime handles speech, transcription, turn detection, and responses. SQLite stores call configuration, final transcripts, facts, events, summaries, and recording metadata. The bridge forwards G.711 μ-law (`audio/pcmu`), 8 kHz, mono audio directly in base64 form; it does not transcode audio. See [Architecture](docs/ARCHITECTURE.md) for lifecycle and interruption details.
 
 ## Requirements
 
-- Python 3.12 or newer
-- [`uv`](https://docs.astral.sh/uv/)
-- A Twilio account with a voice-capable Twilio number
-- An OpenAI API project with access to the configured Realtime model
-- A publicly reachable HTTPS URL for Twilio webhooks
+- Python 3.12 or newer and [`uv`](https://docs.astral.sh/uv/)
+- A Twilio account and a Twilio voice-capable telephone number
+- An OpenAI API key with access to the configured Realtime, transcription, and summary models
+- A public HTTPS/WSS address for local development (for example, ngrok)
 
-## Install and run
+The application has no OS-specific runtime dependency. The automated release checks run on Linux; the commands below also show PowerShell setup. Twilio trial accounts can generally call only verified destination numbers and may have other trial restrictions; consult the Twilio Console if a trial call is rejected.
+
+## Installation
 
 ```bash
+git clone <repository-url>
+cd AI-phone-assistant-v2
 uv sync
 cp .env.example .env
+```
+
+Windows PowerShell uses:
+
+```powershell
+git clone <repository-url>
+Set-Location AI-phone-assistant-v2
+uv sync
+Copy-Item .env.example .env
+```
+
+Edit `.env`; never commit it.
+
+## Environment configuration
+
+Empty values in `.env` are treated as unset. Provider credentials are server-side only.
+
+| Variable | Purpose / default |
+|---|---|
+| `APP_BASE_URL` | Public HTTPS origin, without a path; required for live calls, for example `https://example.ngrok-free.app`. |
+| `APP_HOST`, `APP_PORT` | Bind values for an explicit Uvicorn command; defaults `0.0.0.0`, `8000`. |
+| `APP_TIMEZONE` | Display timezone reserved for UI formatting; UTC is stored internally. Default `Europe/Lisbon`. |
+| `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`; default `INFO`. |
+| `DATABASE_URL` | Async SQLAlchemy URL; default `sqlite+aiosqlite:///./ai_phone_assistant.db`. |
+| `TWILIO_ACCOUNT_SID` | Twilio project Account SID; required for live calls. |
+| `TWILIO_AUTH_TOKEN` | Twilio Auth Token; required for live calls, signature checks, and recording retrieval. |
+| `TWILIO_PHONE_NUMBER` | Voice-capable Twilio caller ID in E.164 format. |
+| `TWILIO_VALIDATE_SIGNATURES` | Validate Twilio HTTP and WebSocket signatures; default `true`. Disable only for controlled local tests. |
+| `OPENAI_API_KEY` | Server-side OpenAI API key; required for live conversations and summaries. |
+| `OPENAI_REALTIME_MODEL` | Realtime speech model; default `gpt-realtime-2.1`. |
+| `OPENAI_REALTIME_VOICE` | Realtime voice; default `marin`. |
+| `OPENAI_TRANSCRIPTION_MODEL` | Input transcription model; default `gpt-live-transcribe`. |
+| `OPENAI_SUMMARY_MODEL` | Responses API text model for structured reports; default `gpt-5.6-luna`. |
+| `OPENAI_REALTIME_VAD_TYPE` | `semantic_vad` (default) or `server_vad`. |
+| `OPENAI_REALTIME_VAD_EAGERNESS` | Semantic VAD response timing: `low`, `medium`, `high`, or `auto`. |
+| `OPENAI_REALTIME_VAD_THRESHOLD` | Server VAD speech threshold; default `0.5`. |
+| `OPENAI_REALTIME_VAD_PREFIX_PADDING_MS` | Audio retained before detected speech; default `300`. |
+| `OPENAI_REALTIME_VAD_SILENCE_DURATION_MS` | Server VAD end-of-turn silence; default `700`. |
+| `DEFAULT_RECORDING_POLICY` | `off`, `ask`, or `always`; default `ask`. |
+| `DOWNLOAD_RECORDINGS_LOCALLY` | Save completed recordings under `RECORDINGS_DIR`; default `false`. |
+| `RECORDINGS_DIR` | Private recording directory; default `./data/recordings`. |
+| `DRY_RUN` | Validate and persist a simulated call without contacting providers; default `false`. |
+
+`uvicorn app.main:app --reload` uses Uvicorn's own default bind settings. To apply the configured bind values explicitly on Unix, run `uv run uvicorn app.main:app --reload --host "$APP_HOST" --port "$APP_PORT"` after exporting them, or pass literal values.
+
+## Twilio setup
+
+1. In the Twilio Console, copy the **Account SID** and **Auth Token** into the matching `.env` variables.
+2. Under **Phone Numbers**, buy or select a number with Voice capability. Put that Twilio-owned number, including `+` and country code, in `TWILIO_PHONE_NUMBER`.
+3. Trial users should verify the destination telephone in the Console before testing.
+4. Start the application and public tunnel described below.
+
+No inbound Voice webhook needs to be configured on the Twilio number. For every outbound call, the application dynamically supplies these public callbacks:
+
+- `POST /twilio/voice?call_id=<internal-uuid>` returns TwiML with `<Connect><Stream>`;
+- `POST /twilio/call-status?call_id=<internal-uuid>` receives call lifecycle changes;
+- `WSS /twilio/media` carries the bidirectional Media Stream;
+- `POST /twilio/recording-status?call_id=<internal-uuid>` receives recording status.
+
+Twilio cannot reach `localhost`, so `APP_BASE_URL` must resolve publicly over HTTPS. The application converts its `https://` origin to `wss://` for the Media Stream. Keep signature validation enabled in normal operation; the exact public URL Twilio signs must match the URL FastAPI reconstructs through the tunnel/proxy.
+
+## Local tunnel
+
+With [ngrok](https://ngrok.com/) installed:
+
+```bash
+ngrok http 8000
+```
+
+If ngrok reports `Forwarding https://example.ngrok-free.app`, set:
+
+```env
+APP_BASE_URL=https://example.ngrok-free.app
+```
+
+The application then gives Twilio `https://example.ngrok-free.app/twilio/...` callbacks and `wss://example.ngrok-free.app/twilio/media`. Restart FastAPI after changing `.env`. Cloudflare Tunnel is also usable if it supplies one stable public HTTPS origin and supports WebSocket forwarding.
+
+## Database initialization
+
+No manual database creation is needed. During FastAPI startup, SQLAlchemy creates missing SQLite tables and applies the small compatibility column additions used by this v1. There is no Alembic command in this release. The default database file is `ai_phone_assistant.db` in the repository root; change `DATABASE_URL` before first startup to place it elsewhere.
+
+## Start the application
+
+```bash
 uv run uvicorn app.main:app --reload
 ```
 
-Open `http://localhost:8000/` for the server-rendered dashboard. **New Call**
-opens a form which creates and immediately starts the outbound call, then moves
-to its detail page. The detail page receives status, canonical transcript,
-fact, objective-status, and significant-event snapshots over Server-Sent
-Events. It never receives raw audio. **End Call** requests a Twilio hangup and
-is safe to press more than once.
+Browse to <http://localhost:8000>. `GET /health` checks SQLite and reports whether Twilio/OpenAI configuration appears present without calling either paid provider or returning credential values.
 
-The equivalent configured host and port command is:
+To explore the UI without paid calls, set `DRY_RUN=true`. A dry run creates a simulated call record, but no telephone rings and no Realtime conversation occurs.
 
-```bash
-uv run uvicorn app.main:app --host "$APP_HOST" --port "$APP_PORT"
-```
+## First call tutorial
 
-Do not add provider credentials to source control. Put them in the ignored
-`.env` file.
-
-## Configuration
-
-Set `APP_BASE_URL` to the public HTTPS origin that forwards to this application,
-with no path or trailing slash. For example, after starting ngrok with
-`ngrok http 8000`, use its HTTPS forwarding URL:
-
-```dotenv
-APP_BASE_URL=https://example-subdomain.ngrok-free.app
-```
-
-For Cloudflare Tunnel, forward the chosen public hostname to
-`http://localhost:8000` and configure its HTTPS origin in the same way:
-
-```dotenv
-APP_BASE_URL=https://calls.example.com
-```
-
-Twilio signs the exact public webhook URL, so `APP_BASE_URL` must match the URL
-Twilio requests. Keep `TWILIO_VALIDATE_SIGNATURES=true` for a real call. Setting
-it to `false` is an explicit development-only bypass.
-
-Configure the remaining values:
-
-```dotenv
-TWILIO_ACCOUNT_SID=AC...
-TWILIO_AUTH_TOKEN=...
-TWILIO_PHONE_NUMBER=+351...
-TWILIO_VALIDATE_SIGNATURES=true
-DRY_RUN=false
-
-OPENAI_API_KEY=sk-...
-OPENAI_REALTIME_MODEL=gpt-realtime-2.1
-OPENAI_REALTIME_VOICE=marin
-OPENAI_REALTIME_VAD_TYPE=semantic_vad
-OPENAI_REALTIME_VAD_EAGERNESS=auto
-OPENAI_REALTIME_VAD_THRESHOLD=0.5
-OPENAI_REALTIME_VAD_PREFIX_PADDING_MS=300
-OPENAI_REALTIME_VAD_SILENCE_DURATION_MS=700
-```
-
-`semantic_vad` with `auto` eagerness is the telephone default: it uses semantic
-completion rather than a short fixed silence and balances turn latency against
-prematurely cutting off the caller. `low`, `medium`, or `high` eagerness can be
-selected. If `OPENAI_REALTIME_VAD_TYPE=server_vad` is selected instead, the
-threshold, prefix padding, and silence duration settings apply; the default
-700 ms silence duration is intentionally not aggressive.
-
-`TWILIO_PHONE_NUMBER` and the destination must use E.164 form. Trial Twilio
-accounts may call only numbers permitted by Twilio's trial-account rules.
-
-## Initiate a call
-
-With the server and tunnel running:
-
-```bash
-curl -X POST http://localhost:8000/calls \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "destination_name": "Loja Exemplo",
-    "destination_number": "+351...",
-    "objective": "Confirmar a hora de fecho hoje e se abre amanhã de manhã.",
-    "context": "A chamada é apenas para recolher informação.",
-    "preferences": "Confirmar horários exatos.",
-    "constraints": "Não fazer marcações nem assumir compromissos.",
-    "language": "pt-PT",
-    "authorized_actions": []
-  }'
-```
-
-Twilio calls the destination and requests `POST /twilio/voice` after answer.
-The returned TwiML connects the call to `WSS /twilio/media`, and the server opens
-an authenticated server-to-server OpenAI Realtime WebSocket. The model identifies
-itself as José's virtual assistant, briefly explains the call-specific objective,
-and begins gathering information. It then uses configured server-side VAD for
-subsequent turns. Lifecycle callbacks and packet/byte counters appear in logs.
-
-Answer the call, listen for the introduction, say “Olá, estás a ouvir-me?”, and
-continue for several turns. A successful stream produces logs with these
-markers:
+Use your own verified mobile telephone for this canonical smoke test:
 
 ```text
-MEDIA_STREAM_CONNECTED
-MEDIA_STREAM_STARTED call_sid=CA... stream_sid=MZ... internal_call_id=...
-OPENAI_REALTIME_CONNECTED model=gpt-realtime-2.1
-MEDIA_RECEIVING call_sid=CA... stream_sid=MZ... packets=... bytes=... approx_seconds=...
-ASSISTANT_INTERRUPTED item_id=item_... audio_end_ms=...
-OPENAI_REALTIME_RESPONSE_CANCELLED
-MEDIA_STREAM_STOPPED call_sid=CA... stream_sid=MZ... packets=... bytes=... approx_seconds=...
-OPENAI_REALTIME_CLOSED
-REALTIME_BRIDGE_STOPPED call_sid=CA... stream_sid=MZ...
+Destination name: My mobile
+Telephone number: +<country-code><number>
+Objective: Ask me what time it is.
+Context: This is a test call.
+Preferences: Keep the call short.
+Constraints: Do not perform any action other than asking the question.
+Language: pt-PT
 ```
 
-The application never logs base64 payloads and does not record audio.
+1. Confirm FastAPI and the tunnel are running and `DRY_RUN=false`.
+2. Open the dashboard and select **New Call**.
+3. Enter the values above; the number must be E.164, such as `+351` followed by the subscriber number.
+4. Submit the form. Creation immediately requests the outbound call and opens its
+   detail page.
+5. Answer when the telephone rings. The agent should identify itself, ask the question, and converse briefly.
+6. Hang up naturally or use **End Call**.
+7. On the call page, inspect final transcript entries, facts, events, and the generated summary. Summary generation is asynchronous, so refresh/live updates may take a moment.
+8. If recording was enabled, use the Audio/Recording section after Twilio marks it complete.
 
-To validate locally without contacting Twilio, set `DRY_RUN=true`, restart the
-server, and submit the same request. The response contains `"simulated": true`.
+## Real-world informational example
 
-## Quality checks
+```text
+Destination name: Garden centre
+Objective: Find out whether they currently have Echeveria plants.
+Context: I may visit today.
+Preferences: Ask which varieties they have and approximate sizes.
+Constraints: Ask for prices. Do not reserve or purchase anything.
+```
+
+The agent may clarify varieties, sizes, prices, and availability. If offered a reservation, it must decline because the call did not authorize a commitment.
+
+## Call authority model
+
+```text
+INFORMATION GATHERING = ALLOWED
+COMMITMENTS = NOT ALLOWED unless explicitly authorized for that call
+```
+
+Allowed behavior includes asking about availability, prices, opening hours, requirements, follow-up details, and reference numbers. By default the agent may not book appointments, purchase products, reserve items, accept quotes, change contracts or services, or commit money. Agent instructions and the call configuration enforce this boundary. There is no owner-approval workflow.
+
+## Recording
+
+- `off`: never start a Twilio recording.
+- `ask`: the agent asks the remote person first; recording starts only after clear consent and the `start_recording_after_consent` tool call.
+- `always`: recording begins when the Media Stream starts, without an in-conversation consent tool step.
+
+Recording metadata (SID, status, duration, channels, and timestamps) is stored in SQLite. The browser retrieves WAV through an authenticated server-side Twilio proxy endpoint; Twilio credentials and storage URLs are not exposed. By default audio remains at Twilio. With `DOWNLOAD_RECORDINGS_LOCALLY=true`, completed WAV data is also written beneath `RECORDINGS_DIR` and served from there when present.
+
+The operator is responsible for configuring and using recording consistently with applicable law. The software does not determine whether recording is lawful.
+
+## Transcript, recording, summary, events, and facts
+
+- **Transcript:** final text from OpenAI Realtime input-transcription and assistant-output events. Partial deltas are not persisted as hundreds of rows.
+- **Recording:** actual telephone audio, only when the recording policy starts it.
+- **Summary:** structured post-call report generated with the Responses API from the transcript, facts, call objective, and tool outcomes.
+- **Events:** meaningful operational timeline, not per-packet audio telemetry.
+- **Facts:** important information the agent explicitly captured, including its confidence.
+
+A transcript can exist without a recording, and a recording can complete after the telephone call ends.
+
+## Troubleshooting and call correlation
+
+Start with `GET /health`, the application log, the tunnel request log, Twilio **Monitor > Logs > Calls**, and the call detail event timeline. Common checks:
+
+- **Phone never rings:** validate Twilio credentials, trial/geo restrictions, E.164 destination, caller number, and Twilio call logs.
+- **Phone rings but is silent:** confirm `wss://.../twilio/media` connected, `OPENAI_API_KEY` is valid, and logs show `MEDIA_STREAM_STARTED` and `OPENAI_REALTIME_CONNECTED`.
+- **WebSocket never connects:** check `APP_BASE_URL`, HTTPS/WSS tunnel support, returned TwiML, tunnel logs, and signature validation.
+- **One-way audio:** input should produce Twilio `media` counters and OpenAI input events; output should produce Twilio JSON `media`/`mark` messages. Audio is PCMU/8 kHz/mono on both sides.
+- **Slow turns or poor interruption:** inspect VAD settings and look for `ASSISTANT_INTERRUPTED`, Twilio `clear`, and mark handling before tuning values.
+- **401/403 signatures:** make the externally signed callback URL and the proxy-visible URL identical; only disable validation for a controlled local diagnostic.
+- **Incomplete transcript:** audio transport and transcription are separate; look for final transcription events and OpenAI errors.
+- **Recording unavailable:** verify the policy, consent tool event in `ask` mode, recording callback, Twilio recording status, and credentials.
+
+Each call has an internal UUID in the UI/database. Twilio adds a Call SID and Stream SID; recordings add a Recording SID. Use those identifiers with the call timeline and provider logs. The application does not log base64 audio. See the full [Troubleshooting guide](docs/TROUBLESHOOTING.md).
+
+## Logging and privacy
+
+`LOG_LEVEL=INFO` emits important call, stream, bridge, summary, and recording lifecycle events without one line per media packet. `LOG_LEVEL=DEBUG` adds protocol event types and playback/bridge diagnostics; it still does not intentionally log base64 audio payloads, API keys, authentication tokens, or entire transcripts. Do not enable third-party HTTP wire logging in production, and treat log files as sensitive operational data.
+
+## HTTP and WebSocket reference
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/` | Recent-call dashboard |
+| `GET` | `/calls/new` | New-call form |
+| `POST` | `/calls` | Create a call record (JSON API or browser form) |
+| `GET` | `/calls/{id}` | Call detail page |
+| `POST` | `/calls/{id}/end` | Idempotently end a live call |
+| `GET` | `/calls/{id}/events` | Server-Sent Events live snapshot stream |
+| `POST` | `/calls/{id}/summary/retry` | Retry a failed/missing summary |
+| `GET` | `/calls/{id}/recording.wav` | Server-proxied completed recording |
+| `GET` | `/health` | Local database/configuration health |
+| `POST` | `/twilio/voice` | Signed Twilio answered-call webhook |
+| `POST` | `/twilio/call-status` | Signed lifecycle callback |
+| `POST` | `/twilio/recording-status` | Signed recording callback |
+| `WS` | `/twilio/media` | Signed bidirectional Media Stream |
+
+The owner-facing UI has no multi-user authentication in this v1; do not expose it directly to an untrusted network.
+
+## Development and verification
 
 ```bash
+uv sync
 uv run ruff check .
 uv run pytest
 ```
 
-## Twilio Media Stream protocol boundary
+A real-provider manual checklist is in [Testing](docs/TESTING.md). Deeper design details are in [Architecture](docs/ARCHITECTURE.md).
 
-The implementation follows Twilio's current Media Streams message shapes for
-`connected`, `start`, `media`, `dtmf`, `mark`, and `stop`. It expects the
-documented fixed stream format: `audio/x-mulaw`, 8,000 Hz, mono. The start event
-supplies the Twilio Call SID, Stream SID, media format, and custom parameters.
-The media payload is base64-encoded audio. Unknown future event names are ignored
-safely, while malformed known events are logged without including audio data.
+## Current limitations
 
-Useful official references for integration review:
-
-- [Media Streams WebSocket messages](https://www.twilio.com/docs/voice/media-streams/websocket-messages)
-- [`<Stream>` TwiML](https://www.twilio.com/docs/voice/twiml/stream)
-- [Media Streams overview](https://www.twilio.com/docs/voice/media-streams)
-
-## OpenAI Realtime protocol boundary
-
-The default is the current `gpt-realtime-2.1` model and the recommended `marin`
-voice. The backend authenticates a server-to-server WebSocket with
-`OPENAI_API_KEY`, sends `session.update`, and requests audio-only output. Both
-input and output are configured as `audio/pcmu`, the API's name for G.711
-mu-law. This exactly matches Twilio's 8 kHz mono `audio/x-mulaw` payload, so the
-codec boundary validates and forwards base64 chunks without transcoding.
-
-Twilio input becomes `input_audio_buffer.append`. OpenAI audio is consumed only
-from `response.output_audio.delta` and returned to Twilio as JSON `media`
-messages using the active Stream SID. Each media chunk is followed by a uniquely
-named Twilio `mark`; only returned marks count as played audio.
-
-Semantic VAD is the default and emits `input_audio_buffer.speech_started` when
-the caller barges in. With `interrupt_response=true`, OpenAI cancels the active
-response. The bridge immediately suppresses late deltas, sends
-`conversation.item.truncate` at the last mark-confirmed playback position, sends
-Twilio `clear`, and resets local playback state. Marks returned after a clear are
-stale and cannot advance the heard-audio position. This remains correct when an
-interruption arrives just after model generation completes but while Twilio
-still has buffered audio.
-
-Official references reviewed for this phase:
-
-- [Realtime API overview](https://developers.openai.com/api/docs/guides/realtime)
-- [Realtime API with WebSocket](https://developers.openai.com/api/docs/guides/realtime-websocket)
-- [Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations)
-- [Realtime VAD](https://developers.openai.com/api/docs/guides/realtime-vad)
-- [`gpt-realtime-2.1` model](https://developers.openai.com/api/docs/models/gpt-realtime-2.1)
-
-## Goal and authority policy
-
-`POST /calls` requires `destination_name`, `destination_number`, `objective`,
-`context`, `preferences`, and `constraints`; `language` defaults to `pt-PT`.
-`authorized_actions` is an optional allow-list. An empty or missing allow-list
-means the call has no authority to reserve, order, purchase, schedule, accept a
-quote, commit money, cancel or modify a service, or enter an agreement. The
-objective itself never grants that authority.
-
-Owner fields are quoted as untrusted call data beneath an immutable authority
-policy. The agent is instructed to clarify ambiguity, confirm prices, dates,
-times and availability, save important facts, and politely decline unauthorized
-commitments while continuing its informational objective. There is no approval
-workflow.
-
-The only model-visible internal tools are:
-
-- `save_fact`: retain a categorized fact with confirmed, reported, or uncertain
-  confidence;
-- `set_objective_status`: set `success`, `partial`, `failed`, or `unknown` with
-  a short operational reason;
-- `finish_call`: schedule a brief spoken thank-you and goodbye. The bridge waits
-  for Twilio's final playback mark before ending the stream.
-
-Tool names are dispatched through a fixed allow-list and arguments are validated
-with Pydantic. Their historical results are persisted; live tool/playback and
-WebSocket state remains deliberately process-local.
-
-The function-call event flow follows the current Realtime protocol: tools are
-declared in `session.update`, completed calls are read from `response.done`,
-results are returned as `function_call_output` conversation items, and a new
-`response.create` continues the conversation.
-
-- [OpenAI Realtime function calling](https://developers.openai.com/api/docs/guides/realtime-conversations#function-calling)
-
-## Durable call history
-
-`DATABASE_URL` defaults to `sqlite+aiosqlite:///./ai_phone_assistant.db`. The
-application creates the SQLAlchemy schema at startup and stores call
-configuration/state, final remote and assistant transcripts, captured facts,
-and significant provider/agent events. All stored timestamps are UTC;
-`APP_TIMEZONE=Europe/Lisbon` reserves the display timezone for a later UI.
-
-Remote transcript deltas are not stored. Canonical remote entries come from
-`conversation.item.input_audio_transcription.completed`; canonical assistant
-entries come from `response.output_audio_transcript.done`. Item sequencing is
-assigned when conversation items are observed, so completion events arriving
-out of order do not reorder the conversation. Audio packets and live WebSocket
-objects are never written to SQLite.
-
-- [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
-
-## Web interface
-
-The interface uses Jinja2 templates, plain CSS, and small vanilla JavaScript
-modules under `app/templates` and `app/static`. There is no browser build step.
-Jinja autoescaping and DOM `textContent` protect provider/model text when it is
-rendered. Provider credentials and authenticated media never enter page data.
-
-The dashboard lists recent calls and historical detail pages remain available
-after restart because they read SQLite rather than the process-local call
-store.
-
-## Post-call reports
-
-After Twilio reports a call as completed, the application submits the objective,
-call configuration, canonical transcript, captured facts, objective state, and
-important tool outcomes to the OpenAI Responses API. `OPENAI_SUMMARY_MODEL`
-defaults to `gpt-5.6-luna`, the current efficient high-volume GPT-5.6 variant;
-it is intentionally separate from the Realtime voice model.
-
-The Responses SDK parses directly into a strict Pydantic schema. Information
-and important numbers carry `confirmed`, `uncertain`, or `not_obtained`
-certainty, and the instructions prohibit inventing evidence or upgrading
-uncertainty. Commitments must remain empty unless both explicit authority and
-call evidence establish one.
-
-Generation is atomically claimed in SQLite. Duplicate completion callbacks do
-not make duplicate model requests. A successful report stores structured JSON,
-display text, and its UTC generation time. A failure leaves the call completed
-and its transcript intact, records a separate report error, and exposes a retry
-button on the call page.
-
-Official implementation references:
-
-- [Responses API text generation](https://developers.openai.com/api/docs/guides/text)
-- [Structured model outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-- [Current model guidance](https://developers.openai.com/api/docs/guides/latest-model)
-
-## Optional call recording
-
-`DEFAULT_RECORDING_POLICY` accepts `off`, `ask`, or `always` and defaults to
-`ask`. A call may override that default in the API or new-call form. Recording
-is independent of Realtime transcription and post-call reports.
-
-- `off`: no recording is started and the agent does not ask about recording.
-- `ask`: the agent asks naturally before pursuing the objective. Only a clear
-  agreement permits the allowlisted `start_recording_after_consent` tool. A
-  refusal or unclear answer starts no recording and the conversation continues.
-- `always`: the backend starts recording when Twilio establishes the Media
-  Stream; the agent does not request consent.
-
-The application makes no legal determination about recording. **The operator is
-responsible for selecting and operating a policy consistent with all applicable
-laws, consent requirements, and notices.** There is no owner approval workflow.
-
-The live-call Recording API requests both tracks in dual-channel format and
-uses an idempotent signed status callback. Metadata is durable in SQLite. The
-call page uses an internal WAV endpoint: the server authenticates to Twilio and
-never exposes credentials or a provider media URL to the browser. Dual-channel
-retrieval automatically falls back to mono when Twilio reports that dual media
-is unavailable.
-
-By default, media remains at Twilio and is proxied on demand. Set
-`DOWNLOAD_RECORDINGS_LOCALLY=true` to download completed WAV files into
-`RECORDINGS_DIR` (default `./data/recordings`). Local media files remain runtime
-data and must not be committed.
-
-- [Twilio Recordings resource and live-call API](https://www.twilio.com/docs/voice/api/recording)
+- Live WebSocket objects and active call orchestration are process-local; restarting the process ends an active conversation even though historical data remains durable.
+- The schema initializer is appropriate for this v1 but is not a general migration system.
+- The UI is designed for one trusted operator and has no account authentication or CSRF layer.
+- Provider outages and delayed recording/summary callbacks remain visible as retryable failures rather than being hidden.
+- Voicemail detection, automatic retries, calling-hour policy, and distributed multi-worker coordination are not implemented.

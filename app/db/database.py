@@ -49,6 +49,12 @@ class Database:
     async def dispose(self) -> None:
         await self.engine.dispose()
 
+    async def check(self) -> None:
+        """Verify database connectivity without changing application data."""
+
+        async with self.engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+
     def session(self) -> AsyncSession:
         return self.sessions()
 

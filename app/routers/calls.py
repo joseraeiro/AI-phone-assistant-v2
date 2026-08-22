@@ -91,7 +91,11 @@ async def create_call(
         )
         logger.error("Twilio rejected outbound call creation (code=%s)", exc.code)
         raise HTTPException(
-            status_code=502, detail="Twilio could not create the outbound call"
+            status_code=502,
+            detail=(
+                "Twilio rejected the outbound call request. Check the destination "
+                "number and Twilio Console call logs."
+            ),
         ) from exc
 
     simulated = call.sid == "DRY_RUN"

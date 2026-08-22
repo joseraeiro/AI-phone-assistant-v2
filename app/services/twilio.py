@@ -10,13 +10,13 @@ from app.config import Settings
 
 
 class CallsResource(Protocol):
-    """Subset of the Twilio calls resource used by this phase."""
+    """Subset of the Twilio calls resource used by the application."""
 
     def create(self, **kwargs: object) -> object: ...
 
 
 class TwilioClient(Protocol):
-    """Subset of the Twilio client used by this phase."""
+    """Subset of the Twilio client used by the application."""
 
     calls: CallsResource
 

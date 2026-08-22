@@ -476,6 +476,19 @@ directory. Never expose provider credentials or authenticated URLs. Make no
 legal assumptions: the operator owns policy selection and legal compliance. Do
 not add an owner approval workflow.
 
+### Phase 10 — v1 release hardening
+
+Reconcile operator documentation, environment examples, public routes, provider
+callbacks, audio behavior, recording behavior, and database initialization with
+the shipped implementation. Provide reproducible setup, architecture,
+troubleshooting, and real-telephone QA guidance. Validate the local database in
+`GET /health` without making provider calls, report only whether provider
+configuration is present, and log missing live-configuration variable names at
+startup without exposing values. Keep `DRY_RUN` usable without paid-provider
+credentials. Release hardening is conservative: remove stale instructions and
+improve actionable failures, but do not redesign the realtime bridge or add new
+product capabilities.
+
 ### Later phases
 
 Potential work includes stronger owner authentication, deployment hardening,

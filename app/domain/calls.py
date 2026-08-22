@@ -58,7 +58,7 @@ class SavedFact(BaseModel):
 
 
 class CallRuntime:
-    """Minimal process-local state needed by Phase 5 tools."""
+    """Minimal process-local state needed by live-call tools."""
 
     def __init__(self, configuration: CallConfiguration) -> None:
         self.configuration = configuration

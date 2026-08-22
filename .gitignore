@@ -16,12 +16,15 @@ build/
 
 # Runtime data
 *.db
+data/*.db
 *.sqlite
 *.sqlite3
 *.log
 recordings/
 data/recordings/
 audio/
+*.wav
+*.mp3
 
 # Editors and operating systems
 .idea/
